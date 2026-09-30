@@ -1,0 +1,5 @@
+{
+  "name": "sfe-shared",
+  "private": true,
+  "type": "module"
+}

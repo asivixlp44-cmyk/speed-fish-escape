@@ -1,0 +1,1000 @@
+import { Client } from '@colyseus/sdk';
+import {
+    T, V3, $, canvas, renderer, scene, camera, sun, solids, kills, triggers, prompts, tickers,
+    billboard, buildRig, ridePose, buildAuraFx, updateAuraFx, seaMine, updateMines, burst, confettiAt,
+    floatText, updateEffects, lerpAngle,
+} from './engine.js';
+import { buildFish, swimFish } from './fish.js';
+import { S, actions, net } from './state.js';
+import { initAudio, startMusic, sfx, setVolume } from './audio.js';
+import * as BX from './bloxity.js';
+import { createAvatar, loadBase, packAvatar, unpackAvatar, avatarStats } from './avatar.js';
+import { updateMaterials } from './textures.js';
+import { pad, pollGamepad, rumble, onGamepadConnection } from './gamepad.js';
+import { render, setSpeedLines, updateFx, dust, sparkleColumn, ring, fireworks, setQuality, bubble } from './fx.js';
+import { buildWorld, SPAWN, pickups, beltTex, refreshShop, renderBoards, treadLocked, updateSlabs, gatePulse, updateGates } from './world.js';
+import {
+    updateHud, toast, levelUp, showStageTitle, buy, showRevive, hideRevive, closeModal, openModal,
+    refreshModal, promptEl, promptTxtEl, showGoal, animateCounters,
+} from './ui.js';
+import {
+    CFG, STAGES, fishById, auraById, KITS, SKINS, STARTER_FISH, maxSpeedFor, fmt, clamp,
+} from '../../shared/config.js';
+
+// =====================================================================================
+// Local player
+// =====================================================================================
+const HW = 1, PH = 5, STEP = 1.7, GRAV = 196.2, JUMP_V = 50;
+const P = {
+    pos: SPAWN.clone(), vel: new V3(), push: new V3(), onGround: false, ground: null, facing: 0,
+    dead: false, shield: 0, stamina: CFG.staminaMax, staminaIdle: 0, sprinting: false,
+    lastSafe: SPAWN.clone(), safeTimer: 0, stage: -1, moving: false, animPhase: 0, lockToastT: -9,
+    squash: 1, squashV: 0, airTime: 0, lastStep: 0,
+};
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+let shake = 0;
+function addShake(a) { if (!reduceMotion) shake = Math.min(1.2, shake + a); }
+let rig, auraFx, headLabel, headLabelText = '';
+
+// ----- riders -----
+// A rider is a group at the player's feet: the fish they ride, and their body sitting on its
+// saddle (userData.body). Labels and the aura hang off the outer group.
+const HIP = 2; // the blocky rig and the Bloxity body both have the hip about 2 studs up
+function buildRider(kit, skin, name) {
+    const g = new T.Group();
+    const k = KITS[kit % KITS.length];
+    const body = buildRig({ ...k, skin: SKINS[skin % SKINS.length], hair: 0x3a2618, hairStyle: ['short', 'buzz', 'curly', 'fade', 'quiff'][skin % 5], num: 1 + (kit % 99), numC: '#ffffff', label: (name || '').toUpperCase() });
+    g.add(body);
+    g.userData.body = body;
+    return g;
+}
+// Swaps the fish under a rider and moves the body (and the head label) onto its saddle
+function setMount(g, id, label) {
+    const d = fishById[id] || fishById[STARTER_FISH];
+    if (g.userData.fishId === d.id) return;
+    if (g.userData.fish) g.remove(g.userData.fish);
+    const fish = buildFish(d);
+    g.add(fish);
+    g.userData.fish = fish; g.userData.fishId = d.id;
+    const y = fish.userData.seat - HIP + 0.15;
+    g.userData.body.position.y = y;
+    if (label) label.position.y = y + 7.6;
+}
+const trailBack = new V3();
+// Swim the fish, pose the rider, and leave a bubble trail while moving
+function animateRider(g, dt, t, moving, blox, speed) {
+    const u = g.userData;
+    if (u.fish) swimFish(u.fish, dt, moving);
+    ridePose(u.body, t, moving);
+    if (blox) blox.update(dt, { moving, ride: true, speed, t });
+    if (moving && g.visible && Math.random() < dt * 14) {
+        trailBack.set(-Math.sin(g.rotation.y) * 3, 1.5, -Math.cos(g.rotation.y) * 3).add(g.position);
+        bubble(trailBack, 0xbfeaff);
+    }
+}
+
+// ----- Bloxity avatars -----
+// The Bloxity body replaces the blocky body's meshes; the fish, labels and aura stay.
+function dressRig(group, avatar) {
+    const body = group.userData.body;
+    body.children.forEach((c) => { c.visible = false; });
+    body.add(avatar.root);
+    group.userData.blox = avatar;
+}
+let localAvatar = null, localAvatarReq = 0;
+async function setupLocalAvatar() {
+    const req = ++localAvatarReq;
+    const a = await createAvatar(BX.currentAvatar(), BX.getSkinTextureUrl());
+    if (!a) return;
+    if (req !== localAvatarReq || !rig) { a.dispose(); return; }
+    if (localAvatar) localAvatar.dispose();
+    localAvatar = a;
+    dressRig(rig, a);
+}
+function syncMyAvatar() {
+    const av = BX.currentAvatar();
+    if (localAvatar && av) { localAvatar.setProportions(av.proportions); localAvatar.setEquipped(av, BX.getSkinTextureUrl()); }
+    net.send('avatar', { av: packAvatar(av) });
+}
+async function playEmoteOn(avatar, id) {
+    if (!avatar) return;
+    const cat = await BX.loadEmotes();
+    const e = cat.get(id);
+    if (e && e.clip) avatar.playEmote(e.clip);
+}
+// Chat bubble above a rig for a few seconds
+function chatBubble(group, text) {
+    if (!group) return;
+    if (group.userData.bubble) { group.remove(group.userData.bubble); group.userData.bubble.material.map.dispose(); }
+    const b = billboard([{ t: '💬 ' + text, c: '#ffffff', s: '#16121f', px: 44 }], 9, 1024, new V3(0, 9.4, 0), group);
+    group.userData.bubble = b;
+    setTimeout(() => { if (group.userData.bubble === b) { group.remove(b); b.material.map.dispose(); group.userData.bubble = null; } }, 5000);
+}
+
+function buildPlayer(kit, skin) {
+    if (rig) scene.remove(rig);
+    rig = buildRider(kit, skin, S.name);
+    scene.add(rig);
+    headLabelText = '';
+    headLabel = billboard([{ t: '0 Speed', c: '#ffffff', s: '#16121f', px: 60 }], 6, 512, new V3(0, 10, 0), rig);
+    setMount(rig, S.equipped, headLabel);
+    auraFx = buildAuraFx(rig);
+    rig.position.copy(P.pos);
+    localAvatar = null;
+    setupLocalAvatar();
+}
+function overlapsBox(c, x, y, z) {
+    return c.max.x > x - HW && c.min.x < x + HW && c.max.y > y && c.min.y < y + PH && c.max.z > z - HW && c.min.z < z + HW;
+}
+function freeAt(x, y, z) {
+    for (const c of solids) if (overlapsBox(c, x, y, z)) return false;
+    return true;
+}
+function moveAxis(axis, d) {
+    if (d === 0) return;
+    const p = P.pos;
+    p[axis] += d;
+    for (const c of solids) {
+        if (!overlapsBox(c, p.x, p.y, p.z)) continue;
+        if (axis === 'y') {
+            if (d < 0) { p.y = c.max.y; P.vel.y = Math.max(0, P.vel.y); P.onGround = true; P.ground = c; }
+            else { p.y = c.min.y - PH - 1e-4; if (P.vel.y > 0) P.vel.y = 0; }
+        } else {
+            const rise = c.max.y - p.y;
+            if (rise > 0 && rise <= STEP && (P.onGround || P.vel.y <= 0) && freeAt(p.x, c.max.y + 0.01, p.z)) { p.y = c.max.y + 0.001; continue; }
+            if (d > 0) p[axis] = c.min[axis] - HW - 1e-4; else p[axis] = c.max[axis] + HW + 1e-4;
+        }
+    }
+}
+function walkSpeed() {
+    const max = maxSpeedFor(S.level, S.rebirths);
+    let s = S.customSpeed > 0 && S.customSpeed <= max ? S.customSpeed : max;
+    if (P.sprinting) s *= CFG.sprintMult;
+    return s;
+}
+
+function teleport(pos, yaw) {
+    P.pos.copy(pos); P.vel.set(0, 0, 0); P.push.set(0, 0, 0);
+    P.lastSafe.copy(pos);
+    P.facing = yaw || 0; cam.yaw = (yaw || 0) + Math.PI;
+    for (const t of triggers) t.inside = overlapsBox(t, pos.x, pos.y, pos.z);
+    resetChase();
+    sendMove(true);
+}
+function teleportLobby() { P.stage = -1; teleport(SPAWN, 0); }
+
+function die() {
+    if (P.dead || P.shield > 0) return;
+    P.dead = true;
+    burst(P.pos.clone().add(new V3(0, 2.5, 0)), 0x28c8ff);
+    sfx('death'); addShake(0.9); rumble(1, 400);
+    resetChase();
+    sendMove(true);
+    showRevive();
+}
+actions.revive = (atSpot) => {
+    hideRevive();
+    if (!P.dead) return;
+    P.dead = false;
+    if (atSpot) {
+        teleport(P.lastSafe.clone(), P.facing);
+        P.shield = CFG.shieldTime;
+        const s = STAGES[P.stage];
+        if (s && s.type === 'Chase') startChase(P.stage);
+    } else teleportLobby();
+};
+
+// =====================================================================================
+// Stage runtime: sea mines and sharks (server timeline), Megalodon chase (local)
+// =====================================================================================
+const balls = [];
+function spawnBall(m) {
+    const s = STAGES[m.s];
+    if (!s) return;
+    const r = m.d / 2;
+    balls.push({ m: seaMine(m.d), r, x: m.x, y: r, s, t0: m.t });
+}
+function updateBalls() {
+    const now = net.now();
+    for (let i = balls.length - 1; i >= 0; i--) {
+        const b = balls[i];
+        const age = (now - b.t0) / 1000;
+        const z = b.s.cE - 4 - b.s.bs * Math.max(0, age);
+        b.m.position.set(b.x, b.y, z);
+        b.m.rotation.x = -(b.s.bs * age) / b.r;
+        if (age > CFG.ballLifetime || z < b.s.zS + 10) { scene.remove(b.m); balls.splice(i, 1); continue; }
+        // Sand kicked up behind rolling mines near the camera
+        const wall = performance.now();
+        if (wall > (b.dustT || 0) && Math.abs(z - camera.position.z) < 90) {
+            b.dustT = wall + 110;
+            dust(new V3(b.x + (Math.random() - 0.5) * b.r, 0, z + b.r * 0.7), 1, 0.9);
+        }
+        // A near miss rumbles the camera once
+        if (!b.passed && Math.abs(z - P.pos.z) < 2 && Math.abs(b.x - P.pos.x) < b.r + 5 && !P.dead) { b.passed = true; addShake(0.18); }
+        if (P.dead || P.shield > 0) continue;
+        const cx = clamp(b.x, P.pos.x - HW, P.pos.x + HW), cy = clamp(b.y, P.pos.y, P.pos.y + PH), cz = clamp(z, P.pos.z - HW, P.pos.z + HW);
+        const dx = cx - b.x, dy = cy - b.y, dz = cz - z;
+        if (dx * dx + dy * dy + dz * dz < b.r * b.r) {
+            let sx = P.pos.x - b.x; if (Math.abs(sx) < 0.5) sx = Math.random() < 0.5 ? -1 : 1;
+            P.push.copy(new V3(Math.sign(sx) * 0.55, 0, -1).normalize().multiplyScalar(CFG.ballKnockback));
+            P.vel.y = 38; P.onGround = false;
+            P.shield = 0.35;
+            sfx('hit'); addShake(0.7); rumble(0.8, 250);
+        }
+    }
+}
+
+// Sharks swim across the lane; touching one is a KO. The top of a jump clears them.
+const sharks = [];
+const HAZARD_SHARK = { ...fishById.Megalodon, id: 'hazardShark', size: 1.45 };
+function spawnShark(m) {
+    const s = STAGES[m.s];
+    if (!s || s.type !== 'Sharks') return;
+    const f = buildFish(HAZARD_SHARK);
+    f.rotation.y = m.dir * Math.PI / 2;
+    scene.add(f);
+    sharks.push({ f, s, z: m.z, dir: m.dir, t0: m.t });
+}
+function updateSharks(dt) {
+    const now = net.now(), half = CFG.courseWidth / 2 + 14;
+    for (let i = sharks.length - 1; i >= 0; i--) {
+        const k = sharks[i];
+        const age = (now - k.t0) / 1000;
+        const x = -k.dir * half + k.dir * k.s.bs * age;
+        k.f.position.set(x, 0.4, k.z);
+        swimFish(k.f, dt, true);
+        if (age > CFG.sharkLifetime || Math.abs(x) > half + 2) { scene.remove(k.f); sharks.splice(i, 1); continue; }
+        if (P.dead || P.shield > 0) continue;
+        // Body from tail to nose along x, a little narrower and lower than the model
+        const cx = x + k.dir * 1.5;
+        if (Math.abs(P.pos.x - cx) < 9 + HW && Math.abs(P.pos.z - k.z) < 2.2 + HW && P.pos.y < 4.6 && P.pos.y + PH > 0.8) { sfx('chomp'); die(); }
+    }
+}
+
+const chase = { active: false, stage: null, z: 0, wait: 0 };
+function resetChase() {
+    if (chase.stage) { chase.stage.chaseMesh.visible = false; chase.stage.chaseKill.active = false; }
+    chase.active = false; chase.stage = null;
+}
+function startChase(idx) {
+    resetChase();
+    const s = STAGES[idx];
+    Object.assign(chase, { active: true, stage: s, z: s.zS - 6, wait: s.chaseWait });
+    s.chaseMesh.visible = true; s.chaseKill.active = true;
+    sfx('roar'); addShake(0.5);
+}
+function updateChase(dt) {
+    if (!chase.active) return;
+    const s = chase.stage;
+    if (chase.wait > 0) chase.wait -= dt;
+    else chase.z = Math.min(s.cE - 2, chase.z + s.chaseSpeed * dt);
+    s.chaseMesh.position.set(0, 1, chase.z - s.chaseMesh.userData.nose);
+    s.chaseKill.min.z = chase.z - 2; s.chaseKill.max.z = chase.z + 2;
+    if (chase.z >= s.cE - 2) resetChase();
+}
+
+// =====================================================================================
+// Actions triggered by world objects
+// =====================================================================================
+actions.enterStage = (idx) => {
+    if (P.stage === idx) return;
+    P.stage = idx;
+    const s = STAGES[idx];
+    showStageTitle(s);
+    sfx('whoosh'); sfx('gate');
+    gatePulse(idx, P.pos.x, P.pos.y);
+    baseFov += reduceMotion ? 0 : 14;
+    const fl = $('#flash'); fl.classList.remove('show', 'gate'); void fl.offsetWidth; fl.classList.add('show', 'gate');
+    if (s.type === 'Chase') startChase(idx); else resetChase();
+    if (S.level < s.rec && S.rebirths === 0) toast('Recommended Level ' + s.rec + '!', '#ffb51c');
+};
+actions.pad = (idx) => {
+    sendMove(true);
+    net.send('pad', { s: idx });
+    teleportLobby();
+};
+actions.portal = (p) => net.send('portal', { stage: p.stage });
+actions.buy = (kind, key) => {
+    if (kind === 'pass' && key === 'DoubleWins' && S.passes.DoubleWins) { toast('x2 Wins is active!', '#e27bff'); return; }
+    buy(kind, key);
+};
+actions.shop = (d) => {
+    if (!S.owned[d.id] && d.pass) { buy('pass', d.pass); return; }
+    if (!S.owned[d.id] && S.wins < d.req) { toast('Need ' + fmt(d.req - S.wins) + ' more Wins!', '#ff5a5a'); return; }
+    net.send('shop', { id: d.id });
+};
+
+// =====================================================================================
+// Other players
+// =====================================================================================
+const remotes = new Map();
+let joinSynced = false;
+class Remote {
+    constructor(p) {
+        this.rig = buildRider(p.kit, p.skin, p.name);
+        this.rig.position.set(p.x, p.y, p.z);
+        this.rig.rotation.y = p.ry;
+        scene.add(this.rig);
+        this.labelText = '';
+        this.label = billboard([{ t: p.name, c: '#ffffff', s: '#16121f', px: 56 }], 6, 512, new V3(0, 10, 0), this.rig);
+        setMount(this.rig, p.equipped, this.label);
+        this.aura = buildAuraFx(this.rig);
+        this.av = null; this.blox = null; this.dead = false;
+        this.setAvatar(p.av);
+    }
+    setAvatar(av) {
+        this.av = av;
+        const data = av ? unpackAvatar(av) : null;
+        if (this.blox) { this.blox.setProportions(data && data.proportions); this.blox.setEquipped(data || {}); return; }
+        if (this.loading) return;
+        this.loading = true;
+        createAvatar(data).then((a) => {
+            this.loading = false;
+            if (!a) return;
+            if (this.dead) { a.dispose(); return; }
+            this.blox = a;
+            dressRig(this.rig, a);
+            if (this.av !== av) this.setAvatar(this.av);
+        });
+    }
+    update(p, dt, t) {
+        const r = this.rig;
+        const k = 1 - Math.exp(-dt * 12);
+        const tx = p.x, ty = p.y, tz = p.z;
+        if ((r.position.x - tx) ** 2 + (r.position.z - tz) ** 2 > 900) r.position.set(tx, ty, tz);
+        else { r.position.x += (tx - r.position.x) * k; r.position.y += (ty - r.position.y) * k; r.position.z += (tz - r.position.z) * k; }
+        r.rotation.y = lerpAngle(r.rotation.y, p.ry, k);
+        r.visible = p.anim !== 3;
+        if (p.av !== this.av) this.setAvatar(p.av);
+        setMount(r, p.equipped, this.label);
+        animateRider(r, dt, t, p.anim === 1 || p.anim === 2, this.blox, 30);
+        const text = p.name + '|' + fmt(p.speed);
+        if (text !== this.labelText) {
+            this.labelText = text;
+            this.label.userData.set([{ t: p.name, c: '#ffffff', s: '#16121f', px: 50 }, { t: fmt(p.speed) + ' Speed', c: '#7dff6b', s: '#16121f', px: 56 }]);
+        }
+        updateAuraFx(this.aura, auraById[p.aura], t);
+    }
+    dispose() {
+        this.dead = true;
+        if (this.blox) this.blox.dispose();
+        scene.remove(this.rig);
+    }
+}
+function syncRemotes(dt, t) {
+    const room = net.room;
+    if (!room || !room.state || !room.state.players) return 1;
+    const seen = new Set();
+    room.state.players.forEach((p, id) => {
+        if (id === room.sessionId) {
+            // Our own public stats come from the server
+            const oldLevel = S.level;
+            S.name = p.name; S.speed = p.speed; S.wins = p.wins; S.level = p.level; S.xp = p.xp; S.rebirths = p.rebirths;
+            if (!rig || rig.userData.kit !== p.kit) { buildPlayer(p.kit, p.skin); rig.userData.kit = p.kit; }
+            if (oldLevel !== S.level) refreshModal();
+            return;
+        }
+        seen.add(id);
+        let r = remotes.get(id);
+        if (!r) {
+            r = new Remote(p); remotes.set(id, r);
+            if (joinSynced) BX.playerJoined(p.name); else BX.playerInRoom(p.name);
+        }
+        r.update(p, dt, t);
+    });
+    for (const [id, r] of remotes) if (!seen.has(id)) { r.dispose(); remotes.delete(id); }
+    joinSynced = true;
+    return room.state.players.size;
+}
+
+// =====================================================================================
+// Networking
+// =====================================================================================
+const SERVER_URL = import.meta.env.VITE_SERVER_URL
+    || (import.meta.env.DEV ? `${location.protocol}//${location.hostname}:2567` : location.origin);
+let lastMoveSent = 0, lastMoveKey = '';
+function sendMove(force) {
+    const now = performance.now();
+    if (!force && now - lastMoveSent < 66) return;
+    const a = P.dead ? 3 : !P.onGround ? 2 : P.moving ? 1 : 0;
+    const m = { x: +P.pos.x.toFixed(2), y: +P.pos.y.toFixed(2), z: +P.pos.z.toFixed(2), ry: +P.facing.toFixed(3), a, mv: P.moving ? 1 : 0 };
+    const key = m.x + ',' + m.y + ',' + m.z + ',' + m.ry + ',' + a + ',' + m.mv;
+    if (!force && key === lastMoveKey && now - lastMoveSent < 500) return;
+    lastMoveKey = key; lastMoveSent = now;
+    net.send('move', m);
+}
+
+function storageGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function storageSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* private mode */ } }
+function playerUid() {
+    let uid = storageGet('sfe_uid');
+    if (!uid) {
+        uid = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2) + Date.now());
+        storageSet('sfe_uid', uid);
+    }
+    return uid;
+}
+
+async function connect(name) {
+    const client = new Client(SERVER_URL);
+    const id = BX.identity();
+    const room = await client.joinOrCreate('speed', {
+        uid: playerUid(), name: name || id.name, token: id.token, av: packAvatar(BX.currentAvatar()),
+    });
+    net.room = room;
+    joinSynced = false;
+    room.onMessage('hello', (m) => { net.offset = m.now - Date.now(); net.bux = !!m.bux; net.bloxity = !!m.bloxity; });
+    room.onMessage('authed', () => { net.bloxity = true; });
+    room.onMessage('emote', (m) => { const r = remotes.get(m.s); if (r) playEmoteOn(r.blox, m.id); });
+    room.onMessage('chat', (m) => {
+        toast(m.name + ': ' + m.text, '#ffffff');
+        chatBubble(m.s === room.sessionId ? rig : remotes.get(m.s) && remotes.get(m.s).rig, m.text);
+    });
+    BX.updateRoom(room.roomId);
+    BX.gameplayStart();
+    room.onMessage('profile', (m) => {
+        Object.assign(S, m);
+        refreshShop(); refreshModal();
+        if (rig) setMount(rig, S.equipped, headLabel);
+    });
+    room.onMessage('toast', (m) => toast(m.text, m.color));
+    room.onMessage('levelUp', (m) => {
+        levelUp(m.from, m.to);
+        sfx('levelUp'); rumble(0.3, 150);
+        ring(P.pos, 0x46ec50, 10, 0.8);
+        sparkleColumn(P.pos, 0x7dff6b);
+    });
+    room.onMessage('gain', (m) => {
+        if (m.pickup) { floatText('+' + fmt(m.n) + ' Speed', '#7dff6b', P.pos.clone().add(new V3(0, 6, 0))); sfx('pickup'); }
+        else if (m.tread) { floatText('+' + fmt(m.n), '#c28cff', P.pos.clone().add(new V3(0, 7, 0))); sfx('gain'); }
+    });
+    room.onMessage('wins', (m) => {
+        refreshShop();
+        showGoal(m.n);
+        sfx('cheer'); rumble(0.7, 500);
+        confettiAt(P.pos.clone().add(new V3(0, 4, 0)));
+        fireworks(P.pos, 6, () => sfx('firework'));
+    });
+    room.onMessage('portalOk', (m) => {
+        const idx = m.stage - 1;
+        teleport(new V3(0, 0.5, STAGES[idx].zS + 8), 0);
+        actions.enterStage(idx);
+    });
+    room.onMessage('revived', () => actions.revive(true));
+    room.onMessage('fx', () => {
+        confettiAt(P.pos.clone().add(new V3(0, 4, 0)));
+        sparkleColumn(P.pos, 0xffd028);
+        sfx('buy');
+    });
+    room.onMessage('ball', spawnBall);
+    room.onMessage('shark', spawnShark);
+    room.onMessage('boards', renderBoards);
+    room.onLeave((code, reason) => {
+        console.warn('[net] left room', code, reason || '');
+        net.room = null;
+        if (code !== 1000) {
+            $('#offline').hidden = false;
+        }
+    });
+    return room;
+}
+
+// =====================================================================================
+// Camera & input
+// =====================================================================================
+const cam = { yaw: Math.PI, pitch: 0.42, dist: 24, target: new V3() };
+let camSens = 1;
+const keys = {};
+const touchMove = { x: 0, y: 0 };
+let touchSprint = false, touchJump = false, running = false;
+
+addEventListener('keydown', (e) => {
+    if (e.target && e.target.tagName === 'INPUT') { if (e.key === 'Enter') e.target.blur(); return; }
+    keys[e.code] = true;
+    if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
+    if (e.code === 'KeyE' && running) usePrompt();
+    if (e.code === 'Escape') {
+        if (!$('#modal').hidden) closeModal();
+        else if (running && BX.isEmbedded()) BX.showPortalMenu();
+    }
+});
+addEventListener('keyup', (e) => { keys[e.code] = false; });
+addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+const drags = new Map();
+canvas.addEventListener('pointerdown', (e) => { canvas.setPointerCapture(e.pointerId); drags.set(e.pointerId, { x: e.clientX, y: e.clientY }); canvas.focus(); });
+canvas.addEventListener('pointermove', (e) => {
+    const d = drags.get(e.pointerId);
+    if (!d) return;
+    const k = (e.pointerType === 'touch' ? 0.008 : 0.005) * camSens;
+    cam.yaw -= (e.clientX - d.x) * k;
+    cam.pitch = clamp(cam.pitch + (e.clientY - d.y) * k, -0.25, 1.35);
+    d.x = e.clientX; d.y = e.clientY;
+});
+const endDrag = (e) => drags.delete(e.pointerId);
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointercancel', endDrag);
+canvas.addEventListener('wheel', (e) => { cam.dist = clamp(cam.dist + Math.sign(e.deltaY) * 2, 8, 45); e.preventDefault(); }, { passive: false });
+
+const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+if (isTouch) document.body.classList.add('touch');
+(function joystick() {
+    const stick = $('#stick'), knob = $('#knob');
+    let id = null;
+    const set = (e) => {
+        const r = stick.getBoundingClientRect();
+        let dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
+        const max = r.width / 2, l = Math.hypot(dx, dy);
+        if (l > max) { dx *= max / l; dy *= max / l; }
+        knob.style.transform = `translate(${dx}px, ${dy}px)`;
+        touchMove.x = dx / max; touchMove.y = dy / max;
+    };
+    stick.addEventListener('pointerdown', (e) => { id = e.pointerId; stick.setPointerCapture(id); set(e); });
+    stick.addEventListener('pointermove', (e) => { if (e.pointerId === id) set(e); });
+    const end = (e) => { if (e.pointerId !== id) return; id = null; knob.style.transform = ''; touchMove.x = touchMove.y = 0; };
+    stick.addEventListener('pointerup', end); stick.addEventListener('pointercancel', end);
+    const jb = $('#jumpBtn');
+    jb.addEventListener('pointerdown', (e) => { e.preventDefault(); touchJump = true; });
+    jb.addEventListener('pointerup', () => { touchJump = false; });
+    jb.addEventListener('pointercancel', () => { touchJump = false; });
+    const sb = $('#sprintBtn');
+    sb.addEventListener('click', () => { touchSprint = !touchSprint; sb.classList.toggle('on', touchSprint); });
+})();
+
+function rayHit(o, d, maxT) {
+    let best = maxT;
+    for (const c of solids) {
+        let t0 = 0, t1 = best, hit = true;
+        for (const a of ['x', 'y', 'z']) {
+            if (Math.abs(d[a]) < 1e-9) { if (o[a] < c.min[a] || o[a] > c.max[a]) { hit = false; break; } continue; }
+            let ta = (c.min[a] - o[a]) / d[a], tb = (c.max[a] - o[a]) / d[a];
+            if (ta > tb) { const q = ta; ta = tb; tb = q; }
+            t0 = Math.max(t0, ta); t1 = Math.min(t1, tb);
+            if (t0 > t1) { hit = false; break; }
+        }
+        if (hit && t0 > 0 && t0 < best) best = t0;
+    }
+    return best;
+}
+const camDir = new V3(), camGoal = new V3(), camPos = new V3(), lookTmp = new V3();
+const ATTRACT_LOOK = new V3(0, 8, 10);
+let intro = null, baseFov = camera.fov;
+const ease = (k) => (k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2);
+function updateCamera(dt) {
+    if (!running) {
+        const t = performance.now() / 1000;
+        camera.position.set(Math.sin(t * 0.08) * 55, 22, Math.cos(t * 0.08) * 45 - 5);
+        camera.lookAt(ATTRACT_LOOK);
+        baseFov = camera.fov;
+        return;
+    }
+    cam.target.lerp(camGoal.set(P.pos.x, P.pos.y + 5.5, P.pos.z), 1 - Math.exp(-dt * 18));
+    const cp = Math.cos(cam.pitch);
+    camDir.set(Math.sin(cam.yaw) * cp, Math.sin(cam.pitch), Math.cos(cam.yaw) * cp);
+    const dist = Math.max(3, rayHit(cam.target, camDir, cam.dist) - 0.8);
+    camPos.copy(cam.target).addScaledVector(camDir, dist);
+    if (intro) {
+        // Fly from the menu orbit down to the player
+        intro.t += dt;
+        const k = ease(Math.min(1, intro.t / intro.dur));
+        camera.position.lerpVectors(intro.from, camPos, k);
+        camera.lookAt(lookTmp.lerpVectors(ATTRACT_LOOK, cam.target, k));
+        if (intro.t >= intro.dur) intro = null;
+    } else {
+        camera.position.copy(camPos);
+        camera.lookAt(cam.target);
+    }
+    if (shake > 0.001) {
+        const s = shake * shake * 0.9;
+        camera.position.x += (Math.random() * 2 - 1) * s;
+        camera.position.y += (Math.random() * 2 - 1) * s;
+        shake = Math.max(0, shake - dt * 2.2);
+    }
+    // Field of view widens with speed and sprint
+    const fovBase = innerWidth < innerHeight ? 85 : 70;
+    const speedKick = P.moving ? Math.min(8, Math.max(0, walkSpeed() - 30) * 0.08) : 0;
+    const want = fovBase + speedKick + (P.sprinting && !reduceMotion ? 9 : 0);
+    baseFov += (want - baseFov) * Math.min(1, dt * 5);
+    if (Math.abs(camera.fov - baseFov) > 0.01) { camera.fov = baseFov; camera.updateProjectionMatrix(); }
+    sun.position.set(P.pos.x + 40, P.pos.y + 90, P.pos.z - 30);
+    sun.target.position.copy(P.pos);
+}
+
+// Proximity prompts ("E  Equip Saka")
+let activePrompt = null;
+const projV = new V3();
+function updatePrompt() {
+    let best = null, bd = Infinity;
+    if (!P.dead) for (const p of prompts) {
+        const d = p.pos.distanceTo(P.pos);
+        if (d < p.r && d < bd) { bd = d; best = p; }
+    }
+    activePrompt = best;
+    if (!best) { promptEl.hidden = true; return; }
+    projV.copy(best.pos).setY(best.pos.y + 2).project(camera);
+    if (projV.z > 1) { promptEl.hidden = true; return; }
+    promptEl.hidden = false;
+    promptEl.style.left = ((projV.x + 1) / 2 * innerWidth) + 'px';
+    promptEl.style.top = ((1 - projV.y) / 2 * innerHeight) + 'px';
+    const txt = best.label();
+    if (promptTxtEl.textContent !== txt) promptTxtEl.textContent = txt;
+    const key = usingPad() ? 'X' : 'E';
+    if (promptKey.textContent !== key) promptKey.textContent = key;
+}
+function usePrompt() { if (activePrompt) activePrompt.act(); }
+const promptKey = promptEl.querySelector('kbd');
+const usingPad = () => pad.connected && performance.now() - pad.lastUsed < 8000;
+
+// Controller buttons: popups and panels first, then gameplay shortcuts
+const shown = (sel) => { const e = $(sel); return !!e && !e.hidden; };
+function focusStep(container, dir) {
+    const items = [...container.querySelectorAll('button:not(:disabled), input[type=range]')];
+    if (!items.length) return;
+    const i = items.indexOf(document.activeElement);
+    const next = items[i < 0 ? 0 : (i + dir + items.length) % items.length];
+    next.focus({ preventScroll: false });
+    next.scrollIntoView({ block: 'nearest' });
+}
+function padButtons() {
+    const p = pad.pressed;
+    if (!p.size) return;
+    const overlay = ['#start', '#offline', '#buy', '#revive', '#modal'].find(shown);
+    if (overlay) pad.jump = false;
+    if (overlay === '#start') { if ((p.has('A') || p.has('START')) && shown('#playBtn')) play(); return; }
+    if (overlay === '#offline') { if (p.has('A')) $('#reconnectBtn').click(); return; }
+    if (overlay === '#buy') { if (p.has('A')) $('#buyOk').click(); else if (p.has('B')) $('#buyCancel').click(); return; }
+    if (overlay === '#revive') { if (p.has('A')) $('#reviveYes').click(); else if (p.has('B')) $('#reviveNo').click(); return; }
+    if (overlay === '#modal') {
+        const body = $('#modal');
+        const el = document.activeElement;
+        const onSlider = el && el.type === 'range' && body.contains(el);
+        if (onSlider && (p.has('LEFT') || p.has('RIGHT'))) {
+            el.value = Number(el.value) + (p.has('RIGHT') ? 5 : -5);
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            return;
+        }
+        if (p.has('DOWN') || p.has('RIGHT')) focusStep(body, 1);
+        else if (p.has('UP') || p.has('LEFT')) focusStep(body, -1);
+        else if (p.has('A') && el && body.contains(el) && el.tagName === 'BUTTON') el.click();
+        else if (['B', 'Y', 'LB', 'RB', 'BACK', 'START'].some((b) => p.has(b))) { closeModal(); canvas.focus(); }
+        return;
+    }
+    if (!running) return;
+    if (p.has('X')) usePrompt();
+    if (p.has('Y')) openModal('store');
+    if (p.has('LB')) openModal('rebirth');
+    if (p.has('RB')) openModal('auras');
+    if (p.has('BACK')) openModal('free');
+    if (p.has('START')) openModal('settings');
+    if (p.has('UP')) cam.dist = clamp(cam.dist - 4, 8, 45);
+    if (p.has('DOWN')) cam.dist = clamp(cam.dist + 4, 8, 45);
+    if (['Y', 'LB', 'RB', 'BACK', 'START'].some((b) => p.has(b))) focusStep($('#modal'), 1);
+}
+onGamepadConnection((g, on) => {
+    if (running) toast(on ? '🎮 Controller connected' : '🎮 Controller disconnected', on ? '#7dff6b' : '#ffb51c');
+});
+let sprintHintPad = null;
+function updateSprintHint() {
+    const p = usingPad();
+    if (p === sprintHintPad) return;
+    sprintHintPad = p;
+    $('#sprintHint').textContent = p ? 'HOLD RT TO SPRINT!' : 'HOLD SHIFT TO SPRINT!';
+}
+promptEl.addEventListener('click', usePrompt);
+
+// =====================================================================================
+// Main update
+// =====================================================================================
+let clockT = 0, hudT = 0, online = 1;
+const tmpF = new V3(), tmpR = new V3(), mv = new V3();
+
+function update(dt) {
+    clockT += dt;
+    const t = clockT;
+    let f = 0, r = 0;
+    if (keys.KeyW || keys.ArrowUp) f += 1;
+    if (keys.KeyS || keys.ArrowDown) f -= 1;
+    if (keys.KeyD || keys.ArrowRight) r += 1;
+    if (keys.KeyA || keys.ArrowLeft) r -= 1;
+    f -= touchMove.y + pad.ly; r += touchMove.x + pad.lx;
+    cam.yaw -= pad.rx * 2.8 * dt;
+    cam.pitch = clamp(cam.pitch + pad.ry * 1.8 * dt, -0.25, 1.35);
+    tmpF.set(-Math.sin(cam.yaw), 0, -Math.cos(cam.yaw));
+    tmpR.set(Math.cos(cam.yaw), 0, -Math.sin(cam.yaw));
+    mv.set(0, 0, 0).addScaledVector(tmpF, f).addScaledVector(tmpR, r);
+    if (mv.lengthSq() > 1) mv.normalize();
+    if (P.dead) mv.set(0, 0, 0);
+    P.moving = mv.lengthSq() > 0.01;
+
+    const wantSprint = keys.ShiftLeft || keys.ShiftRight || touchSprint || pad.sprint;
+    P.sprinting = wantSprint && P.moving && P.stamina > 0;
+    if (P.sprinting) { P.stamina = Math.max(0, P.stamina - CFG.staminaDrain * dt); P.staminaIdle = 0; }
+    else { P.staminaIdle += dt; if (P.staminaIdle > CFG.staminaDelay) P.stamina = Math.min(CFG.staminaMax, P.stamina + CFG.staminaRegen * dt); }
+
+    if (!P.dead) {
+        const ws = walkSpeed();
+        if ((keys.Space || touchJump || pad.jump) && P.onGround) {
+            P.vel.y = JUMP_V; P.onGround = false;
+            sfx('jump'); P.squashV += 5; dust(P.pos, 4, 0.6);
+        }
+        P.vel.y -= GRAV * dt;
+        P.push.multiplyScalar(Math.exp(-(P.onGround ? 4 : 1.2) * dt));
+        let vx = mv.x * ws + P.push.x, vz = mv.z * ws + P.push.z;
+        if (P.onGround && P.ground && P.ground.belt) { vx += P.ground.belt.x; vz += P.ground.belt.z; }
+        const dist = Math.max(Math.abs(vx), Math.abs(vz), Math.abs(P.vel.y)) * dt;
+        const n = Math.max(1, Math.ceil(dist / 0.6));
+        const sdt = dt / n;
+        const wasGround = P.ground;
+        P.onGround = false; P.ground = null;
+        for (let i = 0; i < n; i++) {
+            moveAxis('x', vx * sdt);
+            moveAxis('z', vz * sdt);
+            moveAxis('y', P.vel.y * sdt);
+        }
+        if (!P.onGround && wasGround && P.vel.y <= 0 && P.vel.y > -40) {
+            // Stick to the ground when walking down small steps
+            const y0 = P.pos.y;
+            moveAxis('y', -0.3);
+            if (!P.onGround) P.pos.y = y0;
+        }
+        if (P.onGround) {
+            if (P.airTime > 0.3) {
+                sfx('land');
+                dust(P.pos, P.airTime > 0.7 ? 12 : 7, P.airTime > 0.7 ? 1.4 : 1);
+                P.squashV -= Math.min(9, 3 + P.airTime * 6);
+                if (P.airTime > 0.9) { ring(P.pos, 0xffffff, 5, 0.45); addShake(0.35); rumble(0.4, 120); }
+            }
+            P.airTime = 0;
+        } else P.airTime += dt;
+        if (P.moving) P.facing = lerpAngle(P.facing, Math.atan2(mv.x, mv.z), 1 - Math.exp(-dt * 14));
+
+        if (P.shield > 0) P.shield -= dt;
+        if (P.pos.y < CFG.voidY) { P.shield = 0; die(); }
+        for (const k of kills) {
+            if (!k.active) continue;
+            if (k.max.x > P.pos.x - HW + 0.2 && k.min.x < P.pos.x + HW - 0.2 && k.max.y > P.pos.y + 0.1 && k.min.y < P.pos.y + PH && k.max.z > P.pos.z - HW + 0.2 && k.min.z < P.pos.z + HW - 0.2) { die(); break; }
+        }
+        P.safeTimer -= dt;
+        if (P.onGround && P.safeTimer <= 0 && !(P.ground && P.ground.belt)) { P.lastSafe.copy(P.pos); P.safeTimer = 0.3; }
+
+        for (const tr of triggers) {
+            const inside = overlapsBox(tr, P.pos.x, P.pos.y, P.pos.z);
+            if (inside && !tr.inside && tr.enter) tr.enter();
+            tr.inside = inside;
+            if (P.dead) break;
+        }
+        if (P.pos.z < 70 && P.stage !== -1) { P.stage = -1; resetChase(); }
+
+        // Shoe pickups: collected locally, Speed granted by the server
+        for (const p of pickups) {
+            if (p.respawnAt > t) continue;
+            if (!p.g.visible) p.g.visible = true;
+            if (Math.abs(p.g.position.x - P.pos.x) < 2.8 && Math.abs(p.g.position.z - P.pos.z) < 2.8 && Math.abs(p.g.position.y - (P.pos.y + 1.8)) < 3.5) {
+                sendMove(true);
+                net.send('pickup', { id: p.id, s: p.stage });
+                p.g.visible = false; p.respawnAt = t + CFG.pickupRespawn;
+            }
+        }
+
+        // Locked treadmill: offer the pass / explain the requirement
+        const tread = P.onGround && P.ground && P.ground.tread;
+        if (tread && P.moving && treadLocked(tread) && t - P.lockToastT > 3) {
+            P.lockToastT = t;
+            if (tread.pass) buy('pass', tread.pass); else toast('Need ' + tread.req + ' Wins for this treadmill!', '#ff5a5a');
+        }
+    }
+
+    const crushed = updateSlabs(net.now() / 1000, (s) => !P.dead && Math.abs(P.pos.z - s.z) < 5 && overlapsBox(s.c, P.pos.x, P.pos.y, P.pos.z));
+    if (crushed) { P.shield = 0; die(); }
+    updateChase(dt);
+    updateBalls();
+    updateSharks(dt);
+    updateMines(t);
+    updateEffects(dt);
+    updateFx(dt);
+    updateMaterials(dt);
+    updateGates(t, dt);
+    for (const fn of tickers) fn(dt, t);
+    beltTex.offset.x = (beltTex.offset.x + dt * 0.75) % 1;
+    for (const p of pickups) {
+        if (!p.g.visible) continue;
+        p.g.rotation.y += dt * 2;
+        p.g.position.y = p.base + Math.sin(t * 3 + p.phase) * 0.4;
+    }
+
+    online = syncRemotes(dt, t);
+
+    rig.position.copy(P.pos);
+    rig.rotation.y = P.facing;
+    const hs = P.moving ? walkSpeed() : 0;
+    P.animPhase += dt * (P.onGround ? Math.min(18, 4 + hs * 0.2) : 0);
+    animateRider(rig, dt, t, P.moving, localAvatar, hs);
+    const stepN = Math.floor(P.animPhase / Math.PI);
+    if (P.onGround && P.moving && !P.dead && stepN !== P.lastStep) {
+        sfx('step');
+        if ((P.sprinting || hs > 45) && stepN % 2 === 0) dust(P.pos, 1, 0.5);
+    }
+    P.lastStep = stepN;
+    // Squash & stretch spring around 1
+    P.squashV += (1 - P.squash) * 180 * dt;
+    P.squashV *= Math.exp(-12 * dt);
+    P.squash = clamp(P.squash + P.squashV * dt, 0.7, 1.3);
+    rig.scale.set(1 / Math.sqrt(P.squash), P.squash, 1 / Math.sqrt(P.squash));
+    setSpeedLines(!P.dead && P.moving && (P.sprinting || hs > 60) && !reduceMotion ? (P.sprinting ? 1 : 0.5) : 0, dt);
+    rig.visible = !P.dead && (P.shield <= 0 || Math.floor(t * 12) % 2 === 0);
+    updateAuraFx(auraFx, auraById[S.aura], t);
+    const label = fmt(S.speed) + ' Speed';
+    if (label !== headLabelText) { headLabelText = label; headLabel.userData.set([{ t: label, c: '#ffffff', s: '#16121f', px: 60 }]); }
+
+    sendMove(false);
+    updatePrompt();
+    animateCounters(dt);
+    hudT -= dt;
+    if (hudT <= 0) { hudT = 0.1; updateHud(P, online); refreshShop(); }
+}
+
+// =====================================================================================
+// Boot
+// =====================================================================================
+let lastFrame = 0, loadingSignaled = false, fpsAcc = 0, fpsFrames = 0, showFps = false;
+function frame(now) {
+    const dt = Math.min(0.05, (now - (lastFrame || now)) / 1000);
+    fpsAcc += (now - (lastFrame || now)) / 1000; fpsFrames++;
+    if (fpsAcc >= 0.5) { if (showFps) $('#fps').textContent = Math.round(fpsFrames / fpsAcc) + ' FPS'; fpsAcc = 0; fpsFrames = 0; }
+    lastFrame = now;
+    if (!loadingSignaled) {
+        // First frame after setup: apply portal settings and lift the Bloxity loading overlay
+        loadingSignaled = true;
+        BX.triggerAllSettings();
+    }
+    pollGamepad();
+    padButtons();
+    if (running) { update(dt); updateSprintHint(); }
+    else { beltTex.offset.x = (beltTex.offset.x + dt * 0.75) % 1; updateSlabs(now / 1000); }
+    updateCamera(dt);
+    render();
+    requestAnimationFrame(frame);
+}
+
+// Straight into the game: no menu. Joins with the Bloxity name (or guest name) automatically.
+let joining = false;
+async function play() {
+    if (joining || running) return;
+    joining = true;
+    const err = $('#connectErr'), retry = $('#playBtn');
+    err.hidden = true; retry.hidden = true;
+    $('#loading').hidden = false;
+    $('#loading').textContent = 'Joining…';
+    BX.loadingStep('Joining a server…');
+    initAudio();
+    try {
+        await waitForLogin(1500);
+        const saved = (storageGet('sfe_name') || '').slice(0, 20);
+        const room = await connect(BX.identity().loggedIn ? '' : saved);
+        const me = room.state.players && room.state.players.get(room.sessionId);
+        S.name = me ? me.name : S.name;
+    } catch (e) {
+        console.error(e);
+        joining = false;
+        $('#loading').hidden = true;
+        err.hidden = false;
+        err.textContent = 'Could not reach the game server. Check your connection and try again.';
+        retry.hidden = false;
+        BX.loadingEnd();
+        return;
+    }
+    joining = false;
+    intro = { t: 0, dur: 2.2, from: camera.position.clone() };
+    running = true;
+    startMusic();
+    sfx('bubbles');
+    $('#start').hidden = true;
+    $('#hud').hidden = false;
+    $('#touch').hidden = !isTouch;
+    if (!rig) buildPlayer(0, 0);
+    teleportLobby();
+    showTips();
+    toast('Ride your fish to gain Speed!', '#7dff6b');
+    canvas.focus();
+    BX.loadingEnd();
+}
+// Embedded games get the Bloxity user from the portal handshake a moment after init
+function waitForLogin(ms) {
+    if (!BX.bloxity.ready || BX.identity().loggedIn) return Promise.resolve();
+    return new Promise((res) => {
+        const t0 = performance.now();
+        (function check() { if (BX.identity().loggedIn || performance.now() - t0 > ms) res(); else setTimeout(check, 100); })();
+    });
+}
+// Controls reminder for the first seconds of play
+function showTips() {
+    const el = $('#tips');
+    const k = (key, what) => `<span><kbd>${key}</kbd>${what}</span>`;
+    el.innerHTML = pad.connected
+        ? k('L', 'Move') + k('A', 'Jump') + k('RT', 'Sprint') + k('X', 'Interact') + k('R', 'Camera')
+        : isTouch
+            ? '<span>Joystick to move · JUMP · SPRINT · drag to look</span>'
+            : k('WASD', 'Move') + k('Space', 'Jump') + k('Shift', 'Sprint') + k('E', 'Interact') + k('Drag', 'Camera') + k('Wheel', 'Zoom');
+    el.hidden = false; el.style.opacity = 1;
+    setTimeout(() => { el.style.opacity = 0; }, 9000);
+    setTimeout(() => { el.hidden = true; }, 9900);
+}
+// Browsers only start audio after a user gesture
+function unlockAudioOnGesture() {
+    const unlock = () => { initAudio(); removeEventListener('pointerdown', unlock); removeEventListener('keydown', unlock); removeEventListener('touchstart', unlock); };
+    addEventListener('pointerdown', unlock); addEventListener('keydown', unlock); addEventListener('touchstart', unlock);
+}
+
+// Portal settings only apply when the game runs inside bloxity.io (standalone has its own panel)
+function wirePortalSettings() {
+    const embedded = (fn) => (v) => { if (BX.isEmbedded()) fn(v); };
+    const pct = (v) => clamp((parseInt(v, 10) || 0) / 100, 0, 1);
+    BX.listenSetting('master_volume', embedded((v) => setVolume('master', pct(v))));
+    BX.listenSetting('music_volume', embedded((v) => setVolume('music', pct(v))));
+    BX.listenSetting('graphics_quality', embedded((v) => setQuality(v === 'Low' ? 'low' : v === 'Medium' ? 'medium' : 'high')));
+    BX.listenSetting('camera_sensitivity', embedded((v) => { camSens = clamp(parseFloat(v) || 1, 0.1, 5); }));
+    BX.listenSetting('show_fps', (v) => { showFps = v === 'true'; $('#fps').hidden = !showFps; });
+}
+function wirePortalEvents() {
+    BX.onPortalEvent((event, data) => {
+        if (event === 'respawn_request') { if (P.dead) actions.revive(false); else if (running) teleportLobby(); }
+        else if (event === 'chat_message_sent' && data) net.send('chat', { text: String(data) });
+        else if (event === 'play_emote' && data) { playEmoteOn(localAvatar, String(data)); net.send('emote', { id: String(data) }); }
+    });
+    BX.onAvatarChanged(() => syncMyAvatar());
+    BX.onProportionsChanged(() => syncMyAvatar());
+}
+// Account chip in the HUD
+function showIdentity(id) {
+    const avail = BX.bloxity.ready;
+    $('#acct').hidden = !avail;
+    if (!avail) return;
+    const label = id.name || 'Guest';
+    $('#acctName').textContent = label;
+    $('#acctBtn').textContent = id.loggedIn ? 'Log out' : 'Log in';
+    const pfp = $('#acctPfp');
+    pfp.hidden = !id.pfp;
+    if (id.pfp) pfp.src = id.pfp;
+}
+function toggleLogin() { if (BX.identity().loggedIn) BX.logout(); else BX.login(); }
+
+async function boot() {
+    BX.initBloxity();
+    BX.loadingStep('Loading fonts…');
+    try { await Promise.race([document.fonts.load('700 40px Fredoka'), new Promise((r) => setTimeout(r, 2500))]); } catch (e) { /* fallback font */ }
+    BX.loadingStep('Filling the ocean…');
+    buildWorld();
+    loadBase().catch(() => {}); // warm up the Bloxity body model
+    wirePortalSettings();
+    wirePortalEvents();
+    BX.loadCatalogPrices().then((changed) => { if (changed) refreshShop(); });
+    BX.onIdentity((id) => {
+        showIdentity(id);
+        // Logged in after joining: move this session onto the Bloxity profile
+        if (net.room && id.loggedIn && id.token && !net.bloxity) net.send('auth', { token: id.token });
+        if (net.room) { setupLocalAvatar(); syncMyAvatar(); }
+    });
+    $('#acctBtn').addEventListener('click', toggleLogin);
+    $('#acctPfp').addEventListener('error', (e) => { e.target.hidden = true; });
+    $('#playBtn').addEventListener('click', play);
+    $('#reconnectBtn').addEventListener('click', () => location.reload());
+    unlockAudioOnGesture();
+    requestAnimationFrame(frame);
+    play();
+}
+boot();
+
+// Dev-only hooks for automated QA runs (stripped from production builds)
+if (import.meta.env.DEV) {
+    window.__qa = {
+        P, S, STAGES, avatarStats, scene,
+        showcaseMine: (d, dx, dy, dz) => { const m = seaMine(d); m.position.set(P.pos.x + dx, P.pos.y + dy, P.pos.z + dz); return true; },
+        teleport: (x, y, z) => teleport(new V3(x, y, z), 0),
+        enter: (i) => actions.enterStage(i),
+        hazards: () => ({ sharks: sharks.map((k) => [Math.round(k.f.position.x), Math.round(k.z)]), balls: balls.length, chase: chase.active ? chase.z : null }),
+        buildFish, fishById, spawnShark, net, buy,
+        look: (yaw, pitch, dist) => { cam.yaw = yaw; cam.pitch = pitch; cam.dist = dist; },
+        state: () => ({ x: P.pos.x, y: P.pos.y, z: P.pos.z, dead: P.dead, stage: P.stage, wins: S.wins, level: S.level, speed: S.speed, aura: S.aura, equipped: S.equipped, rebirths: S.rebirths }),
+    };
+}

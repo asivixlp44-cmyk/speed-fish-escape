@@ -1,0 +1,429 @@
+import { Room } from 'colyseus';
+import { GameState, PlayerState } from './schema.js';
+import { getProfile, markDirty, allProfiles, saveProfiles, adoptGuestProgress } from './profiles.js';
+import { verifyBloxityToken, BUX_MODE } from './bloxity.js';
+import {
+    CFG, STAGES, PORTALS, PRODUCTS, PASSES, FISH, fishById, AURAS, auraById, FREE, DAILY, KITS, SKINS,
+    xpFor, maxSpeedFor, speedMult, treadmillAt, stageAt, dailyStatus, dayKey, rewardText, fmt, clamp,
+} from '../../shared/config.js';
+
+const GREEN = '#7dff6b', RED = '#ff5a5a', GOLD = '#ffd028', BLUE = '#6fe0ff';
+
+// Empty string when the player left the name box blank
+function cleanName(name) {
+    return String(name || '').replace(/[^\w .\-]/g, '').trim().slice(0, 20);
+}
+const randomName = () => 'Player' + Math.floor(1000 + Math.random() * 9000);
+const finite = (v) => typeof v === 'number' && Number.isFinite(v);
+// Guest ids come from the browser; they can never claim a Bloxity identity
+const guestUid = (uid, fallback) => String(uid || fallback).replace(/^legion_/, 'guest_').slice(0, 64);
+const cleanAvatar = (av) => (typeof av === 'string' && av.length <= 2000 ? av : '');
+
+export const liveRooms = new Set();
+
+// One shared world: the Atlantis lobby + the 6-stage course. Movement is client-side,
+// everything that changes progress (Speed, Wins, unlocks, purchases) is decided here.
+export class SpeedRoom extends Room {
+    maxClients = CFG.maxPlayers;
+
+    onCreate() {
+        liveRooms.add(this);
+        this.setState(new GameState());
+        this.setPatchRate(50);
+        this.sessions = new Map();
+        this.nextBall = STAGES.map(() => 0);
+        this.joinCount = 0;
+
+        this.onMessage('move', (client, m) => this.onMove(client, m));
+        this.onMessage('pickup', (client, m) => this.onPickup(client, m));
+        this.onMessage('pad', (client, m) => this.onPad(client, m));
+        this.onMessage('portal', (client, m) => this.onPortal(client, m));
+        this.onMessage('shop', (client, m) => this.onShop(client, m));
+        this.onMessage('aura', (client, m) => this.onAura(client, m));
+        this.onMessage('rebirth', (client) => this.onRebirth(client));
+        this.onMessage('free', (client, m) => this.onFree(client, m));
+        this.onMessage('daily', (client) => this.onDaily(client));
+        this.onMessage('buy', (client, m) => this.onBuy(client, m));
+        this.onMessage('custom', (client, m) => this.onCustom(client, m));
+        this.onMessage('auth', (client, m) => this.onBloxityLogin(client, m));
+        this.onMessage('avatar', (client, m) => this.onAvatar(client, m));
+        this.onMessage('emote', (client, m) => this.onEmote(client, m));
+        this.onMessage('chat', (client, m) => this.onChat(client, m));
+
+        this.setSimulationInterval((dt) => this.tick(dt), 100);
+        this.clock.setInterval(() => this.broadcastBoards(), 10000);
+    }
+
+    // A Bloxity token is verified with the Bloxity API; anyone else joins as a guest
+    async onAuth(client, options) {
+        const legion = options && options.token ? await verifyBloxityToken(options.token) : null;
+        return legion ? { legion } : { guest: true };
+    }
+
+    onJoin(client, options, auth) {
+        options = options || {};
+        const guest = guestUid(options.uid, client.sessionId);
+        let uid = guest, name = cleanName(options.name);
+        if (auth && auth.legion) {
+            uid = 'legion_' + auth.legion.id;
+            name = cleanName(auth.legion.name) || name;
+            adoptGuestProgress(uid, guest, name);
+        }
+        const profile = getProfile(uid, name, randomName());
+        const player = new PlayerState();
+        player.name = profile.name;
+        player.av = cleanAvatar(options.av);
+        player.x = 0; player.y = 0.5; player.z = -14; player.ry = 0;
+        player.kit = this.joinCount % KITS.length;
+        player.skin = (this.joinCount * 3) % SKINS.length;
+        this.joinCount++;
+        this.state.players.set(client.sessionId, player);
+        this.sessions.set(client.sessionId, {
+            client, profile, player,
+            moving: false, lastMove: 0, gainT: 0,
+            joinedAt: Date.now(), freeClaimed: {}, cooldowns: new Map(), guest, lastChat: 0,
+        });
+        this.syncPublic(client.sessionId);
+        client.send('hello', { now: Date.now(), bux: BUX_MODE, bloxity: uid.startsWith('legion_') });
+        this.sendProfile(client.sessionId);
+        this.broadcastBoards(client);
+    }
+
+    onLeave(client) {
+        this.state.players.delete(client.sessionId);
+        this.sessions.delete(client.sessionId);
+        markDirty();
+    }
+
+    onDispose() { liveRooms.delete(this); saveProfiles(); }
+
+    // ----- helpers -----
+    syncPublic(id) {
+        const s = this.sessions.get(id);
+        if (!s) return;
+        const p = s.profile, pl = s.player;
+        pl.speed = p.speed; pl.wins = p.wins; pl.level = p.level; pl.xp = p.xp;
+        pl.rebirths = p.rebirths; pl.equipped = p.equipped; pl.aura = p.aura || '';
+    }
+    sendProfile(id) {
+        const s = this.sessions.get(id);
+        if (!s) return;
+        const p = s.profile;
+        s.client.send('profile', {
+            owned: p.owned, equipped: p.equipped, auras: p.auras, aura: p.aura, passes: p.passes,
+            boostUntil: p.boostUntil, customSpeed: p.customSpeed, claimedPack: p.claimedPack,
+            firstPlay: p.firstPlay, freeClaimed: s.freeClaimed, joinedAt: s.joinedAt, daily: p.daily,
+        });
+    }
+    toast(s, text, color) { s.client.send('toast', { text, color }); }
+    cooldown(s, key, seconds) {
+        const now = Date.now();
+        if ((s.cooldowns.get(key) || 0) > now) return false;
+        s.cooldowns.set(key, now + seconds * 1000);
+        return true;
+    }
+    changed(id) { this.syncPublic(id); this.sendProfile(id); markDirty(); }
+
+    addSpeed(s, amount, boosted) {
+        const p = s.profile;
+        if (!(amount > 0)) return 0;
+        if (boosted) amount = Math.floor(amount * speedMult(p) + 0.5);
+        p.speed += amount;
+        // XP is earned 1:1 with Speed; at MAX level the bar keeps filling up to its cap
+        const old = p.level;
+        p.xp += amount;
+        while (p.level < CFG.maxLevel && p.xp >= xpFor(p.level)) { p.xp -= xpFor(p.level); p.level++; }
+        if (p.level >= CFG.maxLevel) p.xp = Math.min(p.xp, xpFor(CFG.maxLevel));
+        if (p.level > old) s.client.send('levelUp', { from: old, to: p.level });
+        markDirty();
+        return amount;
+    }
+    addWins(s, n, boosted) {
+        if (boosted && s.profile.passes.DoubleWins) n *= 2;
+        s.profile.wins += n;
+        markDirty();
+        return n;
+    }
+
+    // ----- simulation -----
+    tick(dt) {
+        const now = Date.now();
+        const occupied = STAGES.map(() => false);
+        for (const [id, s] of this.sessions) {
+            const pl = s.player;
+            const st = stageAt(pl.z);
+            if (st >= 0 && pl.anim !== 3) occupied[st] = true;
+
+            // Speed from running, every 0.5s while the player is moving
+            s.gainT += dt / 1000;
+            if (s.gainT < CFG.gainInterval) continue;
+            s.gainT -= CFG.gainInterval;
+            if (!s.moving || now - s.lastMove > 700 || pl.anim === 3) continue;
+            let mult = 1;
+            const tread = treadmillAt(pl.x, pl.y, pl.z);
+            if (tread && !this.treadLocked(s.profile, tread)) mult = tread.mult;
+            const bonus = (fishById[s.profile.equipped] || { bonus: 0 }).bonus;
+            const got = this.addSpeed(s, (1 + bonus) * mult, true);
+            this.syncPublic(id);
+            if (mult > 1) s.client.send('gain', { n: got, tread: 1 });
+        }
+
+        // Rolling sea mines and crossing sharks: one shared timeline per occupied stage
+        STAGES.forEach((stage, i) => {
+            const hazard = stage.ballLane > 0 || stage.type === 'Sharks';
+            if (!occupied[i] || !hazard) { this.nextBall[i] = 0; return; }
+            if (!this.nextBall[i]) this.nextBall[i] = now + 1500;
+            if (now < this.nextBall[i]) return;
+            this.nextBall[i] = now + stage.bi * 1000;
+            if (stage.type === 'Sharks') {
+                // A shark swims across the lane somewhere along the stage
+                const z = stage.zS + 40 + Math.random() * (stage.cE - stage.zS - 60);
+                this.broadcast('shark', { s: i, z, dir: Math.random() < 0.5 ? -1 : 1, t: now });
+                return;
+            }
+            const min = stage.bmin || 8, max = stage.bmax || 12;
+            const d = min + Math.random() * (max - min);
+            const lane = Math.max(0, stage.ballLane - d / 2);
+            this.broadcast('ball', { s: i, x: (Math.random() * 2 - 1) * lane, d, t: now });
+        });
+    }
+
+    treadLocked(p, def) {
+        if (def.pass) return !p.passes[def.pass];
+        if (def.req) return p.wins < def.req;
+        return false;
+    }
+
+    broadcastBoards(target) {
+        const list = [];
+        for (const p of allProfiles()) list.push(p);
+        const top = (key) => list.slice().sort((a, b) => b[key] - a[key]).slice(0, 10).map((p) => ({ n: p.name, v: p[key] }));
+        const msg = { speed: top('speed'), wins: top('wins') };
+        if (target) target.send('boards', msg); else this.broadcast('boards', msg);
+    }
+
+    // ----- messages -----
+    onMove(client, m) {
+        const s = this.sessions.get(client.sessionId);
+        if (!s || !m || !finite(m.x) || !finite(m.y) || !finite(m.z)) return;
+        const pl = s.player;
+        pl.x = clamp(m.x, -200, 200);
+        pl.y = clamp(m.y, -100, 200);
+        pl.z = clamp(m.z, -200, 4000);
+        pl.ry = finite(m.ry) ? m.ry : 0;
+        pl.anim = clamp(m.a | 0, 0, 3);
+        s.moving = !!m.mv;
+        s.lastMove = Date.now();
+    }
+
+    onPickup(client, m) {
+        const s = this.sessions.get(client.sessionId);
+        if (!s || !m) return;
+        const st = STAGES[m.s | 0];
+        if (!st || stageAt(s.player.z) !== (m.s | 0)) return;
+        if (!this.cooldown(s, 'pickup:' + String(m.id).slice(0, 16), CFG.pickupRespawn - 0.5)) return;
+        const got = this.addSpeed(s, st.pickup, true);
+        this.syncPublic(client.sessionId);
+        client.send('gain', { n: got, pickup: 1 });
+    }
+
+    onPad(client, m) {
+        const s = this.sessions.get(client.sessionId);
+        const st = m && STAGES[m.s | 0];
+        if (!s || !st) return;
+        const z = s.player.z;
+        if (z < st.cE - 5 || z > st.zE + 5) return;
+        if (!this.cooldown(s, 'pad', 2)) return;
+        const got = this.addWins(s, st.wins, true);
+        this.syncPublic(client.sessionId);
+        client.send('wins', { n: got });
+    }
+
+    onPortal(client, m) {
+        const s = this.sessions.get(client.sessionId);
+        const portal = m && PORTALS.find((p) => p.stage === (m.stage | 0));
+        if (!s || !portal) return;
+        if (portal.stage > STAGES.length) return this.toast(s, 'Coming soon!', BLUE);
+        if (s.profile.wins < portal.req) return this.toast(s, 'Need ' + fmt(portal.req - s.profile.wins) + ' more Wins!', RED);
+        client.send('portalOk', { stage: portal.stage });
+    }
+
+    onShop(client, m) {
+        const s = this.sessions.get(client.sessionId);
+        const d = m && fishById[m.id];
+        if (!s || !d) return;
+        const p = s.profile;
+        if (p.owned[d.id]) {
+            if (p.equipped !== d.id) { p.equipped = d.id; this.toast(s, 'Now riding ' + d.name + '!', BLUE); }
+        } else if (d.pass) {
+            return;
+        } else if (p.wins < d.req) {
+            return this.toast(s, 'Need ' + fmt(d.req - p.wins) + ' more Wins!', RED);
+        } else {
+            p.owned[d.id] = true;
+            p.equipped = d.id;
+            this.toast(s, 'Unlocked ' + d.name + '! +' + fmt(d.bonus) + '/Speed', GREEN);
+        }
+        this.changed(client.sessionId);
+    }
+
+    onAura(client, m) {
+        const s = this.sessions.get(client.sessionId);
+        if (!s) return;
+        const p = s.profile;
+        const a = m && m.id ? auraById[m.id] : null;
+        if (!a) { p.aura = ''; return this.changed(client.sessionId); }
+        const unlocked = p.auras[a.id] || (a.pass ? p.passes[a.pass] : p.wins >= a.req);
+        if (!unlocked) return this.toast(s, 'Need ' + fmt((a.req || 0) - p.wins) + ' more Wins!', RED);
+        p.auras[a.id] = true;
+        p.aura = a.id;
+        this.toast(s, a.name + ' equipped!', '#' + a.color.toString(16).padStart(6, '0'));
+        this.changed(client.sessionId);
+    }
+
+    onRebirth(client) {
+        const s = this.sessions.get(client.sessionId);
+        if (!s) return;
+        const p = s.profile;
+        if (p.level < CFG.maxLevel) return this.toast(s, 'Reach Level ' + CFG.maxLevel + ' to Rebirth!', RED);
+        p.rebirths++;
+        p.level = 1; p.xp = 0; p.customSpeed = 0;
+        this.toast(s, 'REBIRTH! Speed boost is now x' + (1 + p.rebirths * CFG.rebirthStep), BLUE);
+        client.send('fx', { kind: 'confetti' });
+        this.changed(client.sessionId);
+    }
+
+    onFree(client, m) {
+        const s = this.sessions.get(client.sessionId);
+        const i = m ? m.i | 0 : -1;
+        const r = FREE[i];
+        if (!s || !r || s.freeClaimed[i]) return;
+        if ((Date.now() - s.joinedAt) / 60000 < r.min) return;
+        s.freeClaimed[i] = true;
+        if (r.speed) this.addSpeed(s, r.speed, false); else this.addWins(s, r.wins, false);
+        this.toast(s, 'Claimed ' + (r.speed ? '+' + fmt(r.speed) + ' Speed' : '+' + r.wins + ' Wins') + '!', GREEN);
+        client.send('fx', { kind: 'confetti' });
+        this.changed(client.sessionId);
+    }
+
+    onDaily(client) {
+        const s = this.sessions.get(client.sessionId);
+        if (!s) return;
+        const p = s.profile, now = Date.now();
+        const st = dailyStatus(p.daily, now);
+        if (!st.can) return this.toast(s, 'Come back tomorrow for more!', BLUE);
+        const r = DAILY[st.day];
+        p.daily = { last: dayKey(now), streak: st.streak + 1 };
+        if (r.speed) this.addSpeed(s, r.speed, false);
+        if (r.wins) this.addWins(s, r.wins, false);
+        this.toast(s, 'Day ' + p.daily.streak + ' streak! ' + rewardText(r), GREEN);
+        client.send('fx', { kind: 'confetti' });
+        this.changed(client.sessionId);
+    }
+
+    // Demo mode grants for free. In Bux mode (LEGION_WEBHOOK_SECRET set) only the webhook grants.
+    onBuy(client, m) {
+        const s = this.sessions.get(client.sessionId);
+        if (!s || !m) return;
+        if (BUX_MODE) return this.toast(s, 'Purchases use Bux - log in to Bloxity', BLUE);
+        this.grant({ ...s, id: client.sessionId }, m.kind, m.key);
+    }
+
+    // s is a live session, or a stand-in { profile, client: { send() {} } } for offline players
+    grant(s, kind, key) {
+        const m = { kind, key };
+        const client = s.client;
+        const p = s.profile;
+        if (m.kind === 'pass') {
+            const pass = PASSES[m.key];
+            if (!pass) return false;
+            if (p.passes[m.key]) { this.toast(s, pass.name + ' already owned!', BLUE); return true; }
+            p.passes[m.key] = true;
+            const d = FISH.find((x) => x.pass === m.key);
+            if (d) { p.owned[d.id] = true; p.equipped = d.id; }
+            const a = AURAS.find((x) => x.pass === m.key);
+            if (a) { p.auras[a.id] = true; p.aura = a.id; }
+            this.toast(s, pass.name + ' unlocked!', GREEN);
+        } else {
+            const prod = PRODUCTS[m.key];
+            if (!prod) return false;
+            if (m.key === 'Revive') { client.send('revived', {}); return true; }
+            if (m.key === 'SpeedBoost') {
+                p.boostUntil = Math.max(Date.now(), p.boostUntil) + CFG.boostMinutes * 60000;
+                this.toast(s, 'x2 Speed Boost active!', GOLD);
+            }
+            if (m.key === 'StarterPack') {
+                if (p.claimedPack) { this.toast(s, 'Starter Pack already claimed!', BLUE); return true; }
+                p.claimedPack = true;
+            }
+            if (prod.speed) { this.addSpeed(s, prod.speed, false); this.toast(s, '+' + fmt(prod.speed) + ' Speed!', GREEN); }
+            if (prod.wins) { this.addWins(s, prod.wins, false); this.toast(s, '+' + prod.wins + ' Wins!', GOLD); }
+        }
+        client.send('fx', { kind: 'confetti' });
+        if (s.id) this.changed(s.id); else markDirty();
+        return true;
+    }
+
+    onCustom(client, m) {
+        const s = this.sessions.get(client.sessionId);
+        if (!s || !m) return;
+        const p = s.profile;
+        const max = maxSpeedFor(p.level, p.rebirths);
+        const v = Math.floor(Number(m.v) || 0);
+        p.customSpeed = v <= 0 || v >= max ? 0 : clamp(v, CFG.minWalk, max);
+        this.toast(s, 'Walk speed set to ' + (p.customSpeed || max), BLUE);
+        this.changed(client.sessionId);
+    }
+
+    // ----- Bloxity -----
+    // Logged in to Bloxity after joining: move this session onto the Bloxity profile
+    async onBloxityLogin(client, m) {
+        const s = this.sessions.get(client.sessionId);
+        if (!s || !m || s.authing) return;
+        s.authing = true;
+        const legion = await verifyBloxityToken(m.token);
+        s.authing = false;
+        if (!legion || !this.sessions.has(client.sessionId)) return;
+        const uid = 'legion_' + legion.id;
+        if (s.profile.uid === uid) return;
+        const name = cleanName(legion.name) || s.profile.name;
+        adoptGuestProgress(uid, s.profile.uid, name);
+        s.profile = getProfile(uid, name, randomName());
+        s.player.name = s.profile.name;
+        this.changed(client.sessionId);
+        client.send('authed', { name: s.profile.name });
+        this.toast(s, 'Logged in as ' + s.profile.name, GREEN);
+        this.broadcastBoards();
+    }
+    onAvatar(client, m) {
+        const s = this.sessions.get(client.sessionId);
+        if (s && m) s.player.av = cleanAvatar(m.av);
+    }
+    // Emote ids are opaque catalogue ids; other players play the same clip
+    onEmote(client, m) {
+        const s = this.sessions.get(client.sessionId);
+        if (!s || !m || typeof m.id !== 'string' || m.id.length > 40) return;
+        this.broadcast('emote', { s: client.sessionId, id: m.id }, { except: client });
+    }
+    onChat(client, m) {
+        const s = this.sessions.get(client.sessionId);
+        if (!s || !m || typeof m.text !== 'string') return;
+        const now = Date.now();
+        if (now - s.lastChat < 800) return;
+        s.lastChat = now;
+        const text = m.text.replace(/\s+/g, ' ').trim().slice(0, 120);
+        if (text) this.broadcast('chat', { s: client.sessionId, name: s.profile.name, text });
+    }
+}
+
+// Grants a Bux purchase confirmed by the Bloxity webhook, whether or not the player is online
+export function grantPurchase(uid, name, kind, key) {
+    for (const room of liveRooms) {
+        for (const [id, s] of room.sessions) {
+            if (s.profile.uid === uid) return room.grant({ ...s, id }, kind, key);
+        }
+    }
+    const profile = getProfile(uid, name, randomName());
+    const stub = { profile, client: { send() {} } };
+    return SpeedRoom.prototype.grant.call({ toast() {}, addSpeed: SpeedRoom.prototype.addSpeed, addWins: SpeedRoom.prototype.addWins, changed() {} }, stub, kind, key);
+}
