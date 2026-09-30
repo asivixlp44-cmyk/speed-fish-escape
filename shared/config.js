@@ -32,7 +32,7 @@ export const CFG = {
 export const xpFor = (L) => Math.floor(20 * Math.pow(1.42, L - 1));
 export const maxSpeedFor = (L, R) => Math.max(CFG.minWalk, 12 + 2 * L + 20 * (R || 0));
 
-export const LOBBY = { halfX: 85, halfZ: 70, lower: 30, wallHeight: 46, spawn: { x: 0, y: 0.5, z: -14 } };
+export const LOBBY = { halfX: 85, halfZ: 70, lower: 30, wallHeight: 46, spawn: { x: -2, y: 0.5, z: 0 } };
 
 // bi = seconds between hazards, bs = hazard speed. Balls are rolling sea mines,
 // sharks cross the lane sideways, the Chase stage sends a Megalodon after you.
@@ -60,16 +60,15 @@ export function stageAt(z) {
     return -1;
 }
 
-// Lobby order matches the reference: X25, X9, X3, four x1, X3
+// Right-hand side of the lobby (-x, facing Stage 1), listed south to north like the reference: X25, four x1, X3, X9
 export const TREADMILLS = [
     { mult: 25, pass: 'RunArea25x', tag: '*SUPER OP*' },
-    { mult: 9, pass: 'RunArea9x' },
-    { mult: 3, req: 5 },
     { mult: 1 }, { mult: 1 }, { mult: 1 }, { mult: 1 },
-    { mult: 3, req: 5 },
+    { mult: 3 },
+    { mult: 9, pass: 'RunArea9x' },
 ];
 // Belt geometry (also used by the server to know who is on a treadmill)
-export const TREAD_GEO = { cx: LOBBY.halfX - 12, top: 1.5, len: 16, width: 8, z0: -42, step: 12 };
+export const TREAD_GEO = { cx: -(LOBBY.halfX - 14), top: 1.5, len: 14, width: 7, z0: -4, step: 10 };
 export function treadmillAt(x, y, z) {
     const g = TREAD_GEO;
     if (Math.abs(x - g.cx) > g.len / 2 + 1 || y > g.top + 3 || y < g.top - 0.5) return null;
@@ -79,9 +78,11 @@ export function treadmillAt(x, y, z) {
     return null;
 }
 
-export const PORTALS = [
-    { stage: 3, req: 10 }, { stage: 6, req: 100 }, { stage: 9, req: 1000 }, { stage: 12, req: 10000 }, { stage: 15, req: 200000 },
-];
+// Lobby freebies: the Group Chest (once a day), the turtle (after playing a while)
+// and the "Keep playing" hut's free Speed Boost
+export const GROUP_CHEST = { hours: 24, speed: 2500, wins: 2 };
+export const TURTLE_MINUTES = 20;
+export const FREE_BOOST_MINUTES = 15;
 
 export const PRODUCTS = {
     Speed10K: { name: '+10K Speed', price: 29, speed: 10000 },
@@ -90,6 +91,8 @@ export const PRODUCTS = {
     StarterPack: { name: 'OP Starter Pack', price: 19, speed: 50000, wins: 10 },
     Revive: { name: 'Revive', price: 9 },
     SpeedBoost: { name: 'x2 Speed Boost (15 min)', price: 49 },
+    Wins500: { name: '+500 Wins', price: 99, wins: 500 },
+    Wins5K: { name: '+5K Wins', price: 399, wins: 5000 },
 };
 export const PASSES = {
     DoubleSpeed: { name: '2x Speed', price: 3, ic: '⚡', desc: 'Double all Speed you earn' },
@@ -97,8 +100,7 @@ export const PASSES = {
     RunArea9x: { name: '9x Run Area', price: 279, ic: '🏃', desc: 'Unlocks the x9 treadmill' },
     RunArea25x: { name: '25x Run Area', price: 399, ic: '🚀', desc: 'Unlocks the x25 treadmill' },
     CheapFish: { name: 'Cheap Fish: Piranha', price: 9, ic: '🐟', desc: '+30 Speed per step' },
-    SeaSerpent: { name: 'OP Sea Serpent', price: 199, ic: '🐉', desc: '+10K Speed per step' },
-    Kraken: { name: 'Kraken', price: 299, ic: '🐙', desc: '+25K Speed per step' },
+    SeaSerpent: { name: 'OP Serpent', price: 199, ic: '🐉', desc: '+200 Speed per step' },
     RainbowAura: { name: 'Rainbow Aura', price: 99, ic: '🌈', desc: 'x5 Speed aura' },
 };
 // Bloxity Bux SKUs: create these in the game's IAP catalog on bloxity.io (prices live there)
@@ -106,11 +108,12 @@ export const SKUS = {
     product: {
         Speed10K: 'speed_10k', Speed100K: 'speed_100k', Speed1M: 'speed_1m',
         StarterPack: 'starter_pack', Revive: 'revive', SpeedBoost: 'speed_boost',
+        Wins500: 'wins_500', Wins5K: 'wins_5k',
     },
     pass: {
         DoubleSpeed: 'pass_double_speed', DoubleWins: 'pass_double_wins',
         RunArea9x: 'pass_run_area_9x', RunArea25x: 'pass_run_area_25x',
-        CheapFish: 'pass_cheap_fish', SeaSerpent: 'pass_sea_serpent', Kraken: 'pass_kraken', RainbowAura: 'pass_rainbow_aura',
+        CheapFish: 'pass_cheap_fish', SeaSerpent: 'pass_sea_serpent', RainbowAura: 'pass_rainbow_aura',
     },
 };
 // Bux price label for 3D text (DOM uses the coin icon instead)
@@ -124,38 +127,35 @@ export const OFFERS = [
     { title: 'OP STARTER PACK', ic: '🎁', kind: 'product', key: 'StarterPack' },
     { title: 'Cheap Fish x30', ic: '🐟', kind: 'pass', key: 'CheapFish' },
     { title: '1M Speed', ic: '👟', kind: 'product', key: 'Speed1M' },
-    { title: 'Kraken', ic: '🐙', kind: 'pass', key: 'Kraken' },
+    { title: 'OP Serpent', ic: '🐉', kind: 'pass', key: 'SeaSerpent' },
     { title: '9x Run Area', ic: '🏃', kind: 'pass', key: 'RunArea9x' },
 ];
 
-// Fish you ride. bonus = extra Speed per step, req = Wins to unlock.
-// shape picks the model in client/src/fish.js; row 1 is the front shop row, row 2 the raised back row.
+// Fish you ride, in the reference's shop order. bonus = extra Speed per step, req = Wins to unlock.
+// shape picks the model in client/src/fish.js. Row 1 is the low front row (south to north),
+// row 2 the raised back row; the turtle is claimed after playing TURTLE_MINUTES.
 const F_ = (id, name, bonus, req, row, shape, body, belly, fin, extra) =>
     Object.assign({ id, name, bonus, req, row, shape, body, belly, fin }, extra || {});
 export const FISH = [
-    F_('Clownfish', 'Clownfish', 1, 0, 1, 'clown', 0xff7a1a, 0xffffff, 0xff8a2a, { stripe: 0xffffff, rarity: 'common' }),
-    F_('Puffer', 'Pufferfish', 3, 3, 1, 'puffer', 0xffd028, 0xfff3b0, 0xe0a010, { rarity: 'common' }),
-    F_('Snapper', 'Red Snapper', 6, 15, 1, 'snapper', 0xe8303a, 0xffb0a0, 0xb01822, { rarity: 'common' }),
-    F_('Lionfish', 'Lionfish', 25, 75, 1, 'lion', 0xff6a28, 0xfff0e0, 0xffffff, { stripe: 0xffffff, rarity: 'rare' }),
-    F_('Swordfish', 'Swordfish', 50, 300, 2, 'sword', 0x2f6fd8, 0xdfe8ff, 0x1c3f8a, { rarity: 'rare' }),
-    F_('Stingray', 'Stingray', 100, 1000, 2, 'ray', 0x6a5a8a, 0xe8e0f0, 0x4a3a6a, { rarity: 'epic' }),
-    F_('Hammerhead', 'Hammerhead', 250, 10000, 2, 'hammer', 0x7a8ca8, 0xeef2f8, 0x5a6a86, { rarity: 'epic' }),
-    F_('Angler', 'Anglerfish', 500, 50000, 2, 'angler', 0x2a1f3c, 0x3c2c52, 0x1a1428, { glow: 0x6ffcff, rarity: 'legendary' }),
-    F_('Orca', 'Orca', 1000, 100000, 2, 'orca', 0x16161c, 0xf5f5f5, 0x16161c, { rarity: 'legendary' }),
-    F_('Megalodon', 'Megalodon', 2500, 1000000, 2, 'shark', 0x2a3a66, 0xf0e8ee, 0x1c2848, { rarity: 'mythic', size: 1.25 }),
-    F_('Piranha', 'Piranha', 30, 0, 0, 'piranha', 0xd8182c, 0xff6070, 0x8a0c18, { pass: 'CheapFish', special: true, tagline: '*CHEAP FISH!*', rarity: 'rare' }),
-    F_('SeaSerpent', 'Sea Serpent', 10000, 0, 0, 'serpent', 0x1ec8b4, 0xc8fff0, 0x0a7a8a, { pass: 'SeaSerpent', special: true, tagline: '*X10 VALUE*', aura: 0x28e0ff, rarity: 'mythic' }),
-    F_('Kraken', 'Kraken', 25000, 0, 0, 'kraken', 0xc42850, 0xff90b0, 0x7a1030, { pass: 'Kraken', special: true, tagline: '*INSANE VALUE*', aura: 0xff3c78, rarity: 'mythic' }),
+    F_('Clownfish', 'Clownfish', 1, 0, 1, 'clown', 0xff7a1a, 0xffffff, 0xff8a2a, { stripe: 0xffffff }),
+    F_('Puffer', 'Pufferfish', 3, 3, 1, 'puffer', 0xffd028, 0xfff3b0, 0xe0a010),
+    F_('Snapper', 'Red Snapper', 6, 15, 1, 'snapper', 0xe8303a, 0xffb0a0, 0xb01822),
+    F_('Lionfish', 'Lionfish', 25, 75, 1, 'lion', 0xff6a28, 0xfff0e0, 0xffffff, { stripe: 0xffffff }),
+    F_('Piranha', 'Piranha', 30, 0, 1, 'piranha', 0xd8182c, 0xff6070, 0x8a0c18, { pass: 'CheapFish', tagline: 'Cheap Fish!' }),
+    F_('SeaSerpent', 'OP Serpent', 200, 0, 1, 'serpent', 0x1ec8e0, 0xc8fff8, 0x0a8aa8, { pass: 'SeaSerpent', tagline: 'OP SERPENT!', glow: 0x6ff6ff }),
+    F_('Swordfish', 'Blue Marlin', 50, 400, 2, 'sword', 0x1e4fd8, 0xf0f4ff, 0x14308a),
+    F_('Orca', 'Orca', 100, 2000, 2, 'orca', 0x16161c, 0xf5f5f5, 0x16161c, { size: 1.15 }),
+    F_('WhaleShark', 'Whale Shark', 250, 10000, 2, 'whale', 0x1a2a6a, 0xe8eef8, 0x121e50, { stripe: 0xffffff, size: 1.2 }),
+    F_('GreatWhite', 'Great White', 500, 40000, 2, 'shark', 0x9aa2b0, 0xf4f4f4, 0x7a8290, { size: 1.25 }),
+    F_('Leviathan', 'Leviathan', 1000, 200000, 2, 'leviathan', 0x2ab8c8, 0xfff4d8, 0x14303a, { glow: 0xff5ab4, size: 1.35 }),
+    F_('AbyssKing', 'Abyss King', 2500, 1000000, 2, 'abyss', 0x2a1838, 0x3c2450, 0x140c1e, { glow: 0xff2aa0, size: 1.45 }),
+    F_('BloodJaws', 'Blood Jaws', 5000, 4000000, 2, 'jaws', 0xe01e2a, 0xffffff, 0xa0101c, { size: 1.55 }),
+    F_('Turtle', 'Sea Turtle', 150, 0, 0, 'turtle', 0x46e03c, 0xf0e890, 0x2aa028, { timed: true }),
 ];
-export const RARITY = {
-    common: { name: 'COMMON', color: 0x6fe0ff },
-    rare: { name: 'RARE', color: 0x46ec50 },
-    epic: { name: 'EPIC', color: 0xc428ff },
-    legendary: { name: 'LEGENDARY', color: 0xffd028 },
-    mythic: { name: 'MYTHIC', color: 0xff3c50 },
-};
 export const fishById = Object.fromEntries(FISH.map((f) => [f.id, f]));
 export const STARTER_FISH = 'Clownfish';
+// Look of the hazard sharks and the Stage 6 Megalodon (not in the shop)
+export const SHARK_LOOK = { id: 'Megalodon', shape: 'shark', body: 0x2a3a66, belly: 0xf0e8ee, fin: 0x1c2848 };
 
 export const AURAS = [
     { id: 'Bubbles', name: 'Bubbles', req: 10, mult: 1.1, color: 0xffffff, ic: '🫧' },

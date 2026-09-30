@@ -1,21 +1,22 @@
 import {
-    T, V3, scene, mat, box, aabb, UNIT, solids, kills, triggers, prompts, tickers,
-    texFrom, billboard, textPlane, signBoard, hexCss, camera,
+    T, V3, scene, mat, box, aabb, UNIT, solids, kills, triggers, tickers,
+    texFrom, billboard, textPlane, camera,
 } from './engine.js';
-import { S, actions } from './state.js';
+import { S, actions, net } from './state.js';
 import { lavaMaterial, brickMaterial, bannerMaterial, waterMaterial } from './textures.js';
 import { emitTread, bubble } from './fx.js';
 import { buildFish, swimFish } from './fish.js';
 import {
-    CFG, LOBBY, STAGES, TREADMILLS, TREAD_GEO, PORTALS, PRODUCTS, PASSES, FISH, RARITY, fishById, fmt, sci, clamp, rngFrom, buxText,
+    CFG, LOBBY, STAGES, TREADMILLS, TREAD_GEO, PRODUCTS, PASSES, FISH, SHARK_LOOK, GROUP_CHEST, TURTLE_MINUTES, FREE_BOOST_MINUTES,
+    fishById, fmt, sci, clamp, clock, rngFrom, buxText,
 } from '../../shared/config.js';
 
-const HX = LOBBY.halfX, HZ = LOBBY.halfZ, LOWER = LOBBY.lower, WALLH = LOBBY.wallHeight;
-// Lobby: blue sea-floor studs, sand paths, sandstone and blue stone walls, Atlantis gold
+const HX = LOBBY.halfX, HZ = LOBBY.halfZ, WALLH = LOBBY.wallHeight;
+// Lobby colours from the reference: blue studded pool, brown stone paths, sand, gold shop,
+// pale blue-grey Atlantis terraces with yellow trim, gold towers with pink domes
 const LC = {
-    floor: 0x3a86e8, sand: 0xf2d27a, platform: 0xd9b25a, lower: 0xe8c46a, pillar: 0xf0b43c, stone: 0x6a7ea8,
-    frame: 0xc99a3a, frameInner: 0x2a5aa8, kelp: 0x2ee07a, kelpDark: 0x1aa85a, lavender: 0x7fe8ff,
-    treadSign: 0x2a7ad8, shopSign: 0xe8508a, pedestal: 0xffcd28, portal: 0xffdc28, gold: 0xffc83a, dome: 0xff8fc8,
+    pool: 0x3a86e8, stone: 0x9a7e74, sand: 0xf5d65a, trim: 0xffd23a, gold: 0xf2c230, goldDark: 0xd8a020,
+    terrace: 0xaab4cc, terraceDark: 0x8e98b4, pad: 0xffe23a, dome: 0xffa8c8, kelp: 0x2ee07a, kelpDark: 0x1aa85a,
 };
 // Course: water lanes, blue stone walls, sandstone pillars
 const CC = {
@@ -31,6 +32,10 @@ export let beltTex;
 const shopItems = [];
 const treadItems = [];
 const boards = {};
+const signs = {};
+
+// Pool, and the brown stone ring around it (the lobby floor)
+const POOL = { x0: -56, x1: 50, z0: -54, z1: 50 };
 
 // =====================================================================================
 // Decoration
@@ -38,7 +43,7 @@ const boards = {};
 // Swaying kelp stalk: stacked leaves on a pivot at the root
 function kelp(rng, x, z, h) {
     const g = new T.Group(); g.position.set(x, 0, z); scene.add(g);
-    const n = Math.max(3, Math.round(h / 2.2));
+    const n = Math.max(2, Math.round(h / 2.2));
     const segs = [];
     let prev = g;
     for (let i = 0; i < n; i++) {
@@ -58,105 +63,216 @@ function kelp(rng, x, z, h) {
 // Cluster of blocky coral in reef colours
 function coral(rng, x, z, scale) {
     scale = scale || 1;
-    const n = 3 + Math.floor(rng() * 3);
+    const n = 2 + Math.floor(rng() * 3);
     for (let i = 0; i < n; i++) {
         const c = CORAL[Math.floor(rng() * CORAL.length)];
-        const h = (1.5 + rng() * 3) * scale, w = (0.7 + rng() * 0.6) * scale;
-        const px = x + (rng() * 2 - 1) * 2 * scale, pz = z + (rng() * 2 - 1) * 2 * scale;
+        const h = (1.2 + rng() * 2.5) * scale, w = (0.6 + rng() * 0.5) * scale;
+        const px = x + (rng() * 2 - 1) * 1.5 * scale, pz = z + (rng() * 2 - 1) * 1.5 * scale;
         box(w, h, w, px, h / 2, pz, c, { decor: true });
         if (rng() < 0.7) box(w * 0.8, w * 0.8, w * 2.2, px, h * 0.7, pz, c, { decor: true });
         if (rng() < 0.5) box(w * 2.2, w * 0.8, w * 0.8, px, h * 0.5, pz, c, { decor: true });
     }
 }
-// Vent on the floor that keeps puffing bubbles
-function bubbleVent(x, y, z, color) {
-    const at = new V3(x, y, z);
-    let acc = Math.random();
-    tickers.push((dt) => {
-        if (camera.position.distanceToSquared(at) > 120 * 120) return;
-        acc += dt * 4;
-        while (acc > 1) { acc -= 1; bubble(at, color || 0xbfeaff); }
+// Pale cyan crystal shards sticking out of the pool
+const SHARD = new T.ConeGeometry(0.5, 1, 5);
+function crystals(rng, x, z) {
+    for (let i = 0; i < 4; i++) {
+        const m = new T.Mesh(SHARD, mat(i % 2 ? 0x9ff0ff : 0x6fd8f0));
+        const h = 1.2 + rng() * 1.6;
+        m.scale.set(0.8, h, 0.8);
+        m.position.set(x + (rng() * 2 - 1) * 1.2, h / 2, z + (rng() * 2 - 1) * 1.2);
+        m.rotation.set((rng() * 2 - 1) * 0.4, 0, (rng() * 2 - 1) * 0.4);
+        scene.add(m);
+    }
+}
+// Gold colonnade tower with kelp inside and a pink soft-serve dome, standing on the terraces
+function tower(x, y, z, r) {
+    const add = (geo, c, px, py, pz, o) => { const m = new T.Mesh(geo, mat(c, o)); m.position.set(px, py, pz); scene.add(m); return m; };
+    add(new T.CylinderGeometry(r * 1.15, r * 1.25, y + 6, 16), LC.goldDark, x, (y + 6) / 2, z);
+    add(new T.CylinderGeometry(r * 1.1, r * 1.1, 1.2, 16), LC.gold, x, y + 6.6, z);
+    const H = r * 2.6;
+    for (let i = 0; i < 8; i++) {
+        const a = i / 8 * Math.PI * 2;
+        const c = add(UNIT, LC.gold, x + Math.sin(a) * r, y + 7.2 + H / 2, z + Math.cos(a) * r);
+        c.scale.set(r * 0.28, H, r * 0.28); c.rotation.y = a;
+    }
+    for (let i = 0; i < 3; i++) {
+        const k = add(UNIT, i % 2 ? LC.kelp : 0x3cf0c8, x + (i - 1) * r * 0.35, y + 7.2 + H * 0.35, z, i % 2 ? undefined : { neon: true });
+        k.scale.set(r * 0.25, H * 0.7, r * 0.25);
+    }
+    add(new T.CylinderGeometry(r * 1.2, r * 1.1, 1.6, 16), LC.gold, x, y + 7.2 + H + 0.8, z);
+    const base = y + 8.8 + H;
+    add(new T.CylinderGeometry(r * 1.25, r * 1.3, r * 0.7, 16), LC.dome, x, base + r * 0.35, z);
+    add(new T.CylinderGeometry(r * 0.95, r * 1.2, r * 0.7, 16), 0xffb8d2, x, base + r * 1.0, z);
+    add(new T.CylinderGeometry(r * 0.6, r * 0.9, r * 0.6, 16), LC.dome, x, base + r * 1.6, z);
+    add(new T.SphereGeometry(r * 0.55, 12, 8), 0xffb8d2, x, base + r * 2.0, z);
+}
+// Stepped Atlantis terraces around the lobby: jagged blocks, each tier trimmed in yellow.
+// The first tier is the lobby's wall; higher tiers are scenery.
+function terraces(rng) {
+    const seg = 12;
+    const side = (along, fixed, dir, axis, skip) => {
+        for (let a = -along; a < along; a += seg) {
+            const c = a + seg / 2;
+            if (skip && skip(c)) continue;
+            let h = 0;
+            for (let k = 0; k < 4; k++) {
+                h += k === 0 ? 12 + rng() * 6 : 6 + rng() * 9;
+                const depth = 9 + rng() * 3, off = fixed + dir * (k * 10 + depth / 2);
+                const [x, z, sx, sz] = axis === 'x' ? [c, off, seg + 0.2, depth] : [off, c, depth, seg + 0.2];
+                box(sx, h, sz, x, h / 2, z, k % 2 ? LC.terraceDark : LC.terrace, { studs: true, decor: k > 0 });
+                const tx = axis === 'x' ? x : fixed + dir * k * 10 + dir * 0.2, tz = axis === 'x' ? fixed + dir * k * 10 + dir * 0.2 : z;
+                box(axis === 'x' ? seg + 0.3 : 0.7, 0.8, axis === 'x' ? 0.7 : seg + 0.3, tx, h - 0.2, tz, LC.trim, { decor: true });
+            }
+        }
+    };
+    const gate = (c) => Math.abs(c) < 44;
+    side(HX + 40, HZ, 1, 'x', gate);
+    side(HX + 40, -HZ, -1, 'x');
+    side(HZ, HX, 1, 'z');
+    side(HZ, -HX, -1, 'z');
+}
+// Big soap-bubble spheres drifting up through the sky, above head height
+function skyBubbles(rng) {
+    const shell = new T.MeshBasicMaterial({ color: 0xcfefff, transparent: true, opacity: 0.16, depthWrite: false });
+    const shine = new T.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.7, depthWrite: false });
+    const geo = new T.SphereGeometry(1, 20, 14);
+    const list = [];
+    for (let i = 0; i < 18; i++) {
+        const g = new T.Group();
+        const r = 1.5 + rng() * 3;
+        const s = new T.Mesh(geo, shell); s.scale.setScalar(r); g.add(s);
+        const h = new T.Mesh(geo, shine); h.scale.setScalar(r * 0.18); h.position.set(-r * 0.45, r * 0.45, r * 0.6); g.add(h);
+        g.position.set((rng() * 2 - 1) * 110, 30 + rng() * 60, (rng() * 2 - 1) * 100);
+        scene.add(g);
+        list.push({ g, v: 1.5 + rng() * 2, ph: rng() * 6 });
+    }
+    tickers.push((dt, t) => {
+        for (const b of list) {
+            b.g.position.y += b.v * dt;
+            b.g.position.x += Math.sin(t * 0.4 + b.ph) * dt * 0.8;
+            if (b.g.position.y > 95) b.g.position.y = 30;
+        }
     });
 }
-// Atlantis tower: gold shaft with windows, pink dome and a spire
-function tower(x, z, h, r) {
-    const shaft = new T.Mesh(new T.CylinderGeometry(r, r * 1.1, h, 12), mat(LC.gold));
-    shaft.position.set(x, h / 2, z); scene.add(shaft);
-    for (let k = 0; k < 3; k++) {
-        const band = new T.Mesh(new T.CylinderGeometry(r * 1.08, r * 1.08, 1.2, 12), mat(0xe0a020));
-        band.position.set(x, h * (0.35 + k * 0.22), z); scene.add(band);
-    }
-    for (let i = 0; i < 6; i++) {
-        const a = i / 6 * Math.PI * 2;
-        const w = new T.Mesh(UNIT, mat(0x7fe8ff, { neon: true }));
-        w.scale.set(1.4, 3.2, 0.3); w.position.set(x + Math.sin(a) * r, h * 0.72, z + Math.cos(a) * r); w.rotation.y = a; scene.add(w);
-    }
-    const dome = new T.Mesh(new T.SphereGeometry(r * 1.25, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), mat(LC.dome));
-    dome.position.set(x, h, z); scene.add(dome);
-    const spire = new T.Mesh(new T.ConeGeometry(r * 0.35, r * 2.2, 8), mat(LC.gold));
-    spire.position.set(x, h + r * 1.2 + r * 1.1, z); scene.add(spire);
-}
-// Light shafts from the surface: soft additive columns that slowly breathe
-const rayTex = (() => {
-    const c = document.createElement('canvas'); c.width = 4; c.height = 128;
-    const x = c.getContext('2d');
-    const g = x.createLinearGradient(0, 0, 0, 128);
-    g.addColorStop(0, 'rgba(255,255,255,0.9)'); g.addColorStop(0.6, 'rgba(255,255,255,0.25)'); g.addColorStop(1, 'rgba(255,255,255,0)');
-    x.fillStyle = g; x.fillRect(0, 0, 4, 128);
-    return texFrom(c);
-})();
-function lightRay(x, z, w, tilt) {
-    const m = new T.MeshBasicMaterial({ map: rayTex, color: 0x9fdcff, transparent: true, opacity: 0.16, depthWrite: false, side: T.DoubleSide, blending: T.AdditiveBlending, fog: false, toneMapped: false });
-    const p = new T.Mesh(new T.PlaneGeometry(w, 90), m);
-    p.position.set(x, 45, z); p.rotation.set(0, Math.random() * Math.PI, tilt);
-    scene.add(p);
-    const ph = Math.random() * 6;
-    tickers.push((dt, t) => { m.opacity = 0.1 + Math.sin(t * 0.5 + ph) * 0.05; });
-}
-function treasureChest(pos, face) {
-    const g = new T.Group(); g.position.copy(pos); g.rotation.y = Math.atan2(face.x, face.z); scene.add(g);
-    const part = (sx, sy, sz, x, y, z, c, o) => { const m = new T.Mesh(UNIT, mat(c, o)); m.scale.set(sx, sy, sz); m.position.set(x, y, z); m.castShadow = !(o && o.neon); g.add(m); return m; };
-    part(6, 3.4, 4, 0, 1.7, 0, 0x8a4a1c);
-    part(6.2, 0.5, 4.2, 0, 1.2, 0, 0xffc83a);
-    const lid = part(6.1, 1.6, 4.1, 0, 4.1, -0.6, 0x9a5424); lid.rotation.x = -0.5;
-    part(1, 1, 0.3, 0, 2.6, 2.1, 0xffc83a);
-    for (let i = 0; i < 9; i++) part(0.9, 0.9, 0.9, (i % 3 - 1) * 1.5, 3.5 + (i % 2) * 0.3, (Math.floor(i / 3) - 1) * 0.9, i % 4 ? 0xffd84a : 0x7fe8ff, { neon: i % 4 === 0 });
-    solids.push(aabb(pos.x, 2, pos.z, 6.4, 4, 6.4));
-    bubbleVent(pos.x, 4, pos.z, 0xffe07a);
-}
-function leaderboard(pos, title, color) {
-    const g = new T.Group(); g.position.copy(pos); scene.add(g);
-    for (const sx of [-9, 9]) {
-        const leg = new T.Mesh(UNIT, mat(LC.pillar)); leg.scale.set(2, 26, 2); leg.position.set(sx, 13, 0); g.add(leg);
-        solids.push(aabb(pos.x + sx, 13, pos.z, 2, 26, 2));
-    }
-    const back = new T.Mesh(UNIT, mat(0x2a5aa8)); back.scale.set(20, 22, 1.4); back.position.set(0, 16, 0.4); g.add(back);
-    const head = new T.Mesh(UNIT, mat(color)); head.scale.set(22, 4, 2); head.position.set(0, 28.5, 0); head.rotation.x = -0.18; g.add(head);
-    const cv = document.createElement('canvas'); cv.width = 512; cv.height = 560;
+// Flat board whose canvas can be redrawn (hut sign, leaderboards)
+function canvasPlane(w, h, pxW, pxH, pos, face) {
+    const cv = document.createElement('canvas'); cv.width = pxW; cv.height = pxH;
     const tex = texFrom(cv);
-    const scr = new T.Mesh(new T.PlaneGeometry(18, 19.7), new T.MeshBasicMaterial({ map: tex, toneMapped: false }));
-    scr.position.set(0, 16, -0.35); scr.rotation.y = Math.PI; g.add(scr);
-    textPlane([{ t: 'Most ' + title.split(' ')[1], c: '#fff', s: '#16121f', px: 60 }], 16, 512, new V3(pos.x, 28.6, pos.z - 1.2), new V3(pos.x, 28.6, pos.z - 10));
-    billboard([{ t: title, c: hexCss(color), s: '#ffffff', px: 80 }], 18, 512, new V3(pos.x, 35, pos.z));
+    const m = new T.Mesh(new T.PlaneGeometry(w, h), new T.MeshBasicMaterial({ map: tex, transparent: true, toneMapped: false }));
+    m.position.copy(pos); m.rotation.y = Math.atan2(face.x, face.z);
+    scene.add(m);
+    return { cv, tex, m };
+}
+
+// Group Chest: a gold-banded chest gripped by blue tentacles on an icy base
+function groupChest(pos) {
+    const g = new T.Group(); g.position.copy(pos); g.rotation.y = Math.PI / 2 + 0.3; scene.add(g);
+    const part = (sx, sy, sz, x, y, z, c, o) => { const m = new T.Mesh(UNIT, mat(c, o)); m.scale.set(sx, sy, sz); m.position.set(x, y, z); m.castShadow = true; g.add(m); return m; };
+    for (let i = 0; i < 5; i++) part(3 + (i % 2) * 2, 0.5, 2.5 + (i % 3), (i - 2) * 1.8, 0.25, (i % 2 ? 1 : -1) * 1.2, 0xbff0ff);
+    part(8, 5, 6, 0, 3, 0, 0x9a6a2a);
+    for (const x of [-3.4, 0, 3.4]) part(0.6, 5.1, 6.1, x, 3, 0, 0xe8b830);
+    const lid = part(8.2, 2.4, 6.2, 0, 6.3, -0.4, 0xa87430); lid.rotation.x = -0.25;
+    part(1.4, 1.4, 0.4, 0, 4.4, 3.1, 0xffd23a);
+    part(8.4, 0.5, 6.4, 0, 7.6, 0.2, 0xbff6ff);
+    // Tentacles curling round the sides
+    for (const sx of [-1, 1]) for (let k = 0; k < 2; k++) {
+        let y = 0.6;
+        for (let i = 0; i < 5; i++) {
+            const a = i * 0.55;
+            part(1.2, 1.2, 1.2, sx * (4.4 + Math.sin(a) * 0.4), y, (k ? 1.6 : -1.6) + Math.cos(a) * 0.6, i % 2 ? 0x2a6ae8 : 0x3c86ff);
+            y += 1.1;
+        }
+    }
+    solids.push(aabb(pos.x, 4, pos.z, 9, 8, 9));
+    const tr = aabb(pos.x, 3, pos.z, 13, 6, 13);
+    tr.enter = () => actions.chest();
+    triggers.push(tr);
+}
+// The +150/Speed turtle on its magenta hex pad (free after playing a while)
+function turtlePad(pos) {
+    const pad = new T.Mesh(new T.CylinderGeometry(6, 6, 0.4, 6), mat(0xff3cc8, { neon: true }));
+    pad.position.set(pos.x, 0.2, pos.z); scene.add(pad);
+    const t = buildFish(fishById.Turtle);
+    t.position.set(pos.x, 0.4, pos.z); t.rotation.y = 2.3; scene.add(t);
+    tickers.push((dt) => swimFish(t, dt, false));
+    signs.turtle = billboard(turtleLines(), 11, 512, new V3(pos.x, 10.5, pos.z));
+    const tr = aabb(pos.x, 3, pos.z, 10, 6, 10);
+    tr.enter = () => actions.turtle();
+    triggers.push(tr);
+}
+function turtleLines() {
+    const left = TURTLE_MINUTES * 60 - (net.now() - S.joinedAt) / 1000;
+    const status = S.owned.Turtle ? { t: 'OWNED', c: '#6fe0ff' } : left > 0 ? { t: 'Claim In: ' + clock(left), c: '#7dff6b' } : { t: 'CLAIM!', c: '#7dff6b' };
+    return [{ t: '+' + fishById.Turtle.bonus + '/Speed', c: '#6fe0ff', s: '#16121f', px: 80 }, { ...status, s: '#16121f', px: 56 }];
+}
+// "Keep playing for ... Free SPEED BOOST" hut
+function boostHut(pos) {
+    const wood = 0x9a6a4a, ice = 0x9fe8ff;
+    for (const sz of [-1, 1]) for (const sx of [-1, 1]) box(1.2, 9, 1.2, pos.x + sx * 3, 4.5, pos.z + sz * 5, wood, { decor: true });
+    box(7, 8, 0.6, pos.x, 4.5, pos.z + 5.2, 0xc8a88a, { studs: true });
+    box(0.6, 8, 10, pos.x - 3.4, 4.5, pos.z, 0xc8a88a, { studs: true });
+    const roof = box(9, 0.8, 13, pos.x, 9.4, pos.z, ice, { decor: true });
+    roof.rotation.z = -0.12; roof.updateMatrix();
+    signs.hut = canvasPlane(5.6, 4, 256, 184, new V3(pos.x - 3.05, 5, pos.z), new V3(1, 0, 0));
+    drawHut();
+    const tr = aabb(pos.x, 3, pos.z, 7, 6, 9);
+    tr.enter = () => actions.freeBoost();
+    triggers.push(tr);
+}
+function hutText() {
+    const left = FREE_BOOST_MINUTES * 60 - (net.now() - S.joinedAt) / 1000;
+    if (S.freeBoost) return 'Enjoy your boost!';
+    return left > 0 ? Math.floor(left / 60) + ' min ' + Math.floor(left % 60) + ' sec' : 'Step in to claim!';
+}
+function drawHut() {
+    const h = signs.hut, x = h.cv.getContext('2d');
+    x.fillStyle = '#e8dcc8'; x.fillRect(0, 0, 256, 184);
+    x.strokeStyle = '#6a4a30'; x.lineWidth = 8; x.strokeRect(4, 4, 248, 176);
+    x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.fillStyle = '#2a2a3a'; x.font = '700 26px Fredoka, sans-serif'; x.fillText('Keep playing for:', 128, 44);
+    x.font = '700 30px Fredoka, sans-serif'; x.fillText(hutText(), 128, 92);
+    x.fillStyle = '#28a83c'; x.font = '700 26px Fredoka, sans-serif'; x.fillText('Free SPEED BOOST', 128, 142);
+    h.tex.needsUpdate = true;
+    h.last = hutText();
+}
+// Timers on the turtle and hut signs; cheap to call often, redraws only when the text changes
+export function updateLobbySigns() {
+    if (signs.hut && hutText() !== signs.hut.last) drawHut();
+    if (signs.turtle) {
+        const lines = turtleLines(), key = lines.map((l) => l.t).join('|');
+        if (key !== signs.turtle.key) { signs.turtle.key = key; signs.turtle.userData.set(lines); }
+    }
+}
+
+// Carved stone tablet leaderboard with a tilted plaque on top
+function leaderboard(pos, title, face) {
+    const g = new T.Group(); g.position.copy(pos); g.rotation.y = Math.atan2(face.x, face.z); scene.add(g);
+    const part = (sx, sy, sz, x, y, z, c) => { const m = new T.Mesh(UNIT, mat(c)); m.scale.set(sx, sy, sz); m.position.set(x, y, z); m.castShadow = true; g.add(m); return m; };
+    part(18, 3, 5, 0, 1.5, 0, 0x6a6e7c);
+    part(16, 26, 2.4, 0, 16, 0, 0x9aa0ae);
+    const plaque = part(17, 4, 2.4, 0, 31, 0.8, 0xb0b6c4); plaque.rotation.x = -0.35;
+    solids.push(aabb(pos.x, 14, pos.z, 12, 28, 12));
+    const cv = document.createElement('canvas'); cv.width = 512; cv.height = 720;
+    const tex = texFrom(cv);
+    const scr = new T.Mesh(new T.PlaneGeometry(14.6, 20.5), new T.MeshBasicMaterial({ map: tex, toneMapped: false }));
+    scr.position.set(0, 15.5, 1.25); g.add(scr);
+    const head = textPlane([{ t: title, c: '#2a2a3a', px: 90 }], 14, 1024, new V3(), new V3(0, 0, 1));
+    scene.remove(head); head.position.set(0, 31.2, 2.1); head.rotation.x = -0.35; g.add(head);
     return { cv, tex };
 }
 function drawBoard(b, rows, kind) {
     const x = b.cv.getContext('2d');
-    x.fillStyle = '#0f2146'; x.fillRect(0, 0, 512, 560);
-    x.font = '700 30px Fredoka, sans-serif'; x.textBaseline = 'middle';
-    if (!rows.length) {
-        x.textAlign = 'center'; x.fillStyle = '#bfe4ff'; x.fillText('Be the first!', 256, 280);
-    }
+    x.fillStyle = '#9aa0ae'; x.fillRect(0, 0, 512, 720);
+    x.font = '700 34px Fredoka, sans-serif'; x.textBaseline = 'middle';
+    if (!rows.length) { x.textAlign = 'center'; x.fillStyle = '#2a2a3a'; x.fillText('Be the first!', 256, 360); }
     rows.forEach((r, i) => {
-        const y = 32 + i * 54;
-        x.fillStyle = r.you ? 'rgba(70,236,80,0.28)' : (i % 2 ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.1)');
-        x.fillRect(8, y - 24, 496, 48);
-        const rank = r.rank || i + 1;
-        x.fillStyle = rank === 1 ? '#ffd028' : rank === 2 ? '#dfe4f0' : rank === 3 ? '#e0925a' : '#ffffff';
-        x.textAlign = 'left'; x.fillText('#' + rank, 18, y);
-        x.fillStyle = r.you ? '#7dff6b' : '#ffffff'; x.fillText(r.n.slice(0, 16), 86, y);
-        x.textAlign = 'right'; x.fillStyle = kind === 'speed' ? '#6fe0ff' : '#ffb51c';
-        x.fillText(kind === 'speed' ? sci(r.v) : fmt(r.v), 496, y);
+        const y = 40 + i * 68;
+        x.textAlign = 'left'; x.fillStyle = r.you ? '#1a7a2a' : '#2a2a3a';
+        x.fillText('#' + (r.rank || i + 1), 14, y);
+        x.fillText(r.n.slice(0, 13), 84, y);
+        x.textAlign = 'right'; x.fillStyle = '#18a82c';
+        x.fillText(kind === 'speed' ? sci(r.v) : fmt(r.v), 500, y);
     });
     b.tex.needsUpdate = true;
 }
@@ -168,67 +284,52 @@ export function renderBoards(msg) {
         drawBoard(boards[kind], rows, kind);
     }
 }
+// Stage 1 / course end chest
+function treasureChest(pos, face) {
+    const g = new T.Group(); g.position.copy(pos); g.rotation.y = Math.atan2(face.x, face.z); scene.add(g);
+    const part = (sx, sy, sz, x, y, z, c, o) => { const m = new T.Mesh(UNIT, mat(c, o)); m.scale.set(sx, sy, sz); m.position.set(x, y, z); m.castShadow = !(o && o.neon); g.add(m); return m; };
+    part(6, 3.4, 4, 0, 1.7, 0, 0x8a4a1c);
+    part(6.2, 0.5, 4.2, 0, 1.2, 0, 0xffc83a);
+    const lid = part(6.1, 1.6, 4.1, 0, 4.1, -0.6, 0x9a5424); lid.rotation.x = -0.5;
+    part(1, 1, 0.3, 0, 2.6, 2.1, 0xffc83a);
+    for (let i = 0; i < 9; i++) part(0.9, 0.9, 0.9, (i % 3 - 1) * 1.5, 3.5 + (i % 2) * 0.3, (Math.floor(i / 3) - 1) * 0.9, i % 4 ? 0xffd84a : 0x7fe8ff, { neon: i % 4 === 0 });
+    solids.push(aabb(pos.x, 2, pos.z, 6.4, 4, 6.4));
+}
 
 // =====================================================================================
-// Fish shop pedestals
+// Fish shop pedestals: a yellow pad you step on, the fish hovering above it
 // =====================================================================================
 function pedestalLines(d) {
-    const rar = RARITY[d.rarity] || RARITY.common;
-    const lines = [{ t: rar.name, c: hexCss(rar.color), s: '#16121f', px: 40 }, { t: d.name, c: '#ffffff', s: '#16121f', px: 64 }];
-    if (d.tagline) lines.push({ t: d.tagline, c: '#ff4a4a', s: '#16121f', px: 44 });
-    lines.push({ t: '+' + fmt(d.bonus) + '/Speed', c: '#7dff6b', s: '#16121f', px: 50 });
-    if (S.equipped === d.id) lines.push({ t: 'EQUIPPED', c: '#6fe0ff', s: '#16121f', px: 48 });
-    else if (S.owned[d.id]) lines.push({ t: 'OWNED', c: '#ffffff', s: '#16121f', px: 48 });
-    else if (d.pass) lines.push({ t: 'ONLY ' + buxText(PASSES[d.pass].price), c: '#ffd23a', s: '#16121f', px: 50 });
-    else lines.push({ t: fmt(d.req) + ' Wins Required', c: '#ffd028', s: '#16121f', px: 44 });
+    const lines = [{ t: '+' + fmt(d.bonus) + '/Speed', c: '#ffffff', s: '#16121f', px: 72 }];
+    if (S.equipped === d.id) lines.push({ t: 'RIDING', c: '#6fe0ff', s: '#16121f', px: 50 });
+    else if (S.owned[d.id]) lines.push({ t: 'OWNED', c: '#7dff6b', s: '#16121f', px: 50 });
+    else if (d.pass) lines.push({ t: d.tagline + ' ONLY ' + buxText(PASSES[d.pass].price), c: '#7dff6b', s: '#16121f', px: 46 });
+    else lines.push({ t: fmt(d.req) + ' Wins Required', c: '#6fe0ff', s: '#16121f', px: 46 });
     return lines;
 }
-// Vertical fade used by the pedestal light columns
-const columnTex = (() => {
-    const c = document.createElement('canvas'); c.width = 4; c.height = 128;
-    const x = c.getContext('2d');
-    const g = x.createLinearGradient(0, 128, 0, 0);
-    g.addColorStop(0, 'rgba(255,255,255,0.95)'); g.addColorStop(0.35, 'rgba(255,255,255,0.35)'); g.addColorStop(1, 'rgba(255,255,255,0)');
-    x.fillStyle = g; x.fillRect(0, 0, 4, 128);
-    return texFrom(c);
-})();
-function buildPedestal(d, pos, face) {
-    const rar = RARITY[d.rarity] || RARITY.common;
-    const glow = d.aura || rar.color;
-    box(7.8, 0.5, 8.8, pos.x, pos.y + 0.25, pos.z, 0xe0a020, { decor: true });
-    box(7, 1, 8, pos.x, pos.y + 0.6, pos.z, LC.pedestal);
-    const ring = new T.Mesh(new T.CylinderGeometry(3.3, 3.3, 0.1, 40), mat(glow, { neon: true }));
-    ring.position.set(pos.x, pos.y + 1.12, pos.z); scene.add(ring);
-    const colMat = new T.MeshBasicMaterial({ map: columnTex, color: glow, transparent: true, opacity: 0.6, depthWrite: false, side: T.DoubleSide, blending: T.AdditiveBlending, toneMapped: false });
-    const col = new T.Mesh(new T.CylinderGeometry(3.1, 3.1, 9, 32, 1, true), colMat);
-    col.position.set(pos.x, pos.y + 5.6, pos.z); scene.add(col);
+function buildPedestal(d, pos) {
+    const glow = d.glow || 0xffe23a;
+    box(6, 0.3, 6, pos.x, pos.y + 0.15, pos.z, LC.pad, { neon: true, decor: true });
     const fish = buildFish(d);
-    const baseY = pos.y + 1.6;
+    const baseY = pos.y + 1.2 + (d.size ? (d.size - 1) * 1.5 : 0);
     fish.position.set(pos.x, baseY, pos.z);
-    const yaw = Math.atan2(face.x, face.z);
-    fish.rotation.y = yaw + 0.6;
+    fish.rotation.y = -Math.PI / 2 - 0.5;
     scene.add(fish);
-    const bubbleAt = new V3(pos.x, pos.y + 1.2, pos.z);
-    let acc = Math.random();
+    const at = new V3(pos.x, pos.y + 1, pos.z);
     const phase = Math.random() * 6;
+    let acc = Math.random();
     tickers.push((dt, t) => {
-        colMat.opacity = 0.5 + Math.sin(t * 2 + phase) * 0.1;
-        if (camera.position.distanceToSquared(bubbleAt) > 110 * 110) return;
-        // Hover and turn slowly so the whole fish is visible
+        if (camera.position.distanceToSquared(at) > 130 * 130) return;
         swimFish(fish, dt, false);
-        fish.position.y = baseY + 0.6 + Math.sin(t * 1.6 + phase) * 0.35;
-        fish.rotation.y = yaw + Math.sin(t * 0.6 + phase) * 0.9;
-        acc += dt * 3;
-        while (acc > 1) { acc -= 1; bubble(bubbleAt, glow); }
+        fish.position.y = baseY + Math.sin(t * 1.6 + phase) * 0.3;
+        if (d.glow) { acc += dt * 3; while (acc > 1) { acc -= 1; bubble(at, glow); } }
     });
-    // Back-row labels sit higher so they clear the front row's
-    const sp = billboard(pedestalLines(d), 9, 512, new V3(pos.x, pos.y + 13 + (d.row === 2 ? 5 : 0) + (d.size || 1) * 1.5, pos.z));
+    const top = (d.size || 1) * 6.5;
+    const sp = billboard(pedestalLines(d), 11, 512, new V3(pos.x, pos.y + top + 5, pos.z));
     shopItems.push({ d, sp, sig: '' });
-    prompts.push({
-        pos: new V3(pos.x, pos.y + 3, pos.z), r: 9,
-        label: () => S.equipped === d.id ? 'Riding' : S.owned[d.id] ? 'Ride ' + d.name : d.pass ? 'Buy ' + d.name : S.wins >= d.req ? 'Unlock ' + d.name : 'Need ' + fmt(d.req) + ' Wins',
-        act: () => actions.shop(d),
-    });
+    const tr = aabb(pos.x, pos.y + 2, pos.z, 6, 4, 6);
+    tr.enter = () => actions.shop(d);
+    triggers.push(tr);
 }
 
 export function treadLocked(def) {
@@ -236,12 +337,16 @@ export function treadLocked(def) {
     if (def.req) return S.wins < def.req;
     return false;
 }
+const TREAD_LOOK = {
+    25: { frame: 0x16161e, belt: 0x2a2a34, label: '#d0c8f0' },
+    9: { frame: 0xd8f6ff, belt: 0x9fdcf0, label: '#6fe0ff' },
+    3: { frame: 0xff8a1e, belt: 0xd85a10, label: '#ffbe28' },
+    1: { frame: 0x28c8f0, belt: 0x2d2d34, label: '#ffffff' },
+};
 function treadLines(def) {
-    const col = def.mult === 25 ? '#c28cff' : def.mult === 9 ? '#6fe0ff' : def.mult === 3 ? '#ffbe28' : '#ffffff';
-    const lines = [{ t: 'x' + def.mult + ' Speed', c: col, s: '#16121f', px: 70 }];
-    if (def.tag) lines.push({ t: def.tag, c: '#ff4a4a', s: '#16121f', px: 44 });
+    const lines = def.mult > 1 ? [{ t: 'X' + def.mult + ' Speed', c: TREAD_LOOK[def.mult].label, s: '#16121f', px: 72 }] : [];
     if (treadLocked(def)) lines.push({ t: def.pass ? '🔒 ' + buxText(PASSES[def.pass].price) : '🔒 ' + def.req + ' Wins', c: '#ffd028', s: '#16121f', px: 48 });
-    return lines;
+    return lines.length ? lines : [{ t: ' ', px: 10 }];
 }
 export function refreshShop() {
     for (const it of shopItems) {
@@ -253,21 +358,22 @@ export function refreshShop() {
         if (sig !== t.sig) { t.sig = sig; t.sp.userData.set(treadLines(t.def)); }
     }
 }
+// Treadmill facing away from the pool: belt runs toward the pool, console at the back (-x)
 function buildTreadmill(def, cx, top, cz) {
-    const L = TREAD_GEO.len, W = TREAD_GEO.width;
-    const accent = def.mult === 25 ? 0x965aff : def.mult === 9 ? 0x3cc8ff : def.mult === 3 ? 0xff961e : 0xa5a5af;
-    const neon = def.mult > 1;
-    const belt = new T.Mesh(UNIT, new T.MeshLambertMaterial({ map: beltTex, color: 0xffffff }));
+    const L = TREAD_GEO.len, W = TREAD_GEO.width, look = TREAD_LOOK[def.mult];
+    const belt = new T.Mesh(UNIT, new T.MeshLambertMaterial({ map: beltTex, color: look.belt }));
     belt.scale.set(L, 0.6, W); belt.position.set(cx, top + 0.3, cz); belt.receiveShadow = true; scene.add(belt);
-    const c = aabb(cx, top + 0.3, cz, L, 0.6, W); c.belt = new V3(-12, 0, 0); c.tread = def; solids.push(c);
+    const c = aabb(cx, top + 0.3, cz, L, 0.6, W); c.belt = new V3(12, 0, 0); c.tread = def; solids.push(c);
+    const neon = def.mult === 9 || def.mult === 3;
     for (const s of [-1, 1]) {
-        box(L, 0.9, 0.6, cx, top + 0.45, cz + s * (W / 2 + 0.3), accent, { neon });
-        box(0.6, 5, 0.6, cx + L / 2 - 0.5, top + 2.5, cz + s * (W / 2), 0x464650, { decor: true });
+        box(L, 1, 0.7, cx, top + 0.5, cz + s * (W / 2 + 0.35), look.frame, { neon });
+        box(0.7, 5, 0.7, cx - L / 2 + 0.5, top + 2.5, cz + s * (W / 2), look.frame, { decor: true });
     }
-    box(0.6, 0.6, W + 0.6, cx + L / 2 - 0.5, top + 4.2, cz, 0x464650, { decor: true });
-    box(1, 2.4, W - 0.4, cx + L / 2, top + 5.8, cz, 0x23232a, { decor: true });
-    textPlane([{ t: 'x' + def.mult, c: neon ? hexCss(accent) : '#ffffff', px: 90 }], 4, 256, new V3(cx + L / 2 - 0.55, top + 5.8, cz), new V3(cx - 10, top + 5.8, cz));
-    const sp = billboard(treadLines(def), 10, 512, new V3(cx - 2, top + 11, cz));
+    box(0.7, 0.7, W + 0.7, cx - L / 2 + 0.5, top + 4.3, cz, look.frame, { decor: true });
+    box(1, 2.6, W - 0.6, cx - L / 2, top + 5.8, cz, look.frame, { decor: true });
+    box(0.3, 1.8, W - 1.6, cx - L / 2 + 0.55, top + 5.8, cz, def.mult === 25 ? 0x9fe8ff : 0x1e5ad8, { neon: true, decor: true });
+    if (def.mult === 9) for (let i = 0; i < 5; i++) box(1.5 + i % 2, 1.2 + (i % 3) * 0.6, 1.5, cx - L / 2 + 2 + i * 2.8, top + 1, cz + (i % 2 ? 1 : -1) * (W / 2 + 1.2), 0xbff6ff, { decor: true });
+    const sp = billboard(treadLines(def), 12, 512, new V3(cx, top + 11, cz));
     treadItems.push({ def, sp, sig: '' });
     if (def.mult > 1) {
         const at = new V3(cx, top + 0.7, cz);
@@ -275,142 +381,120 @@ function buildTreadmill(def, cx, top, cz) {
         tickers.push((dt) => { acc += dt * 14; while (acc > 1) { acc -= 1; emitTread(at, def.mult, L, W); } });
     }
 }
+// Floating banner: white text on a bar that fades out at both ends
+function gradientBanner(text, colors, w, pos, face) {
+    const cv = document.createElement('canvas'); cv.width = 1024; cv.height = 200;
+    const x = cv.getContext('2d');
+    const g = x.createLinearGradient(0, 0, 1024, 0);
+    g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(0.2, colors[0]); g.addColorStop(0.8, colors[1]); g.addColorStop(1, 'rgba(0,0,0,0)');
+    x.fillStyle = g; x.fillRect(0, 40, 1024, 120);
+    x.font = '700 104px Fredoka, sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.lineJoin = 'round'; x.lineWidth = 14; x.strokeStyle = '#16121f'; x.strokeText(text, 512, 104);
+    x.fillStyle = '#ffffff'; x.fillText(text, 512, 104);
+    const m = new T.Mesh(new T.PlaneGeometry(w, w * 200 / 1024), new T.MeshBasicMaterial({ map: texFrom(cv), transparent: true, depthWrite: false, side: T.DoubleSide, toneMapped: false }));
+    m.position.copy(pos); m.rotation.y = Math.atan2(face.x, face.z);
+    scene.add(m);
+    return m;
+}
+// Round pad that opens a purchase when stepped on (+10K SPEED, +500 WINS ...)
+function buyPad(x, z, color, lines, kind, key) {
+    const pad = new T.Mesh(new T.CylinderGeometry(2.6, 2.6, 0.3, 28), mat(color, { neon: true }));
+    pad.position.set(x, 0.15, z); scene.add(pad);
+    billboard(lines, 7, 512, new V3(x, 4, z));
+    const tr = aabb(x, 2, z, 5, 4, 5);
+    tr.enter = () => actions.buy(kind, key);
+    triggers.push(tr);
+}
 
 // =====================================================================================
-// Lobby: Atlantis plaza
+// Lobby: Atlantis plaza from the reference video
+//   facing Stage 1 (north, +z): FISH shop on the left (+x), AUTO-TRAIN treadmills, hut,
+//   Group Chest, turtle and boards on the right (-x); pool + spawn in the middle
 // =====================================================================================
 function buildLobby() {
     const rng = rngFrom(7);
-    const half = CFG.courseWidth / 2;
-    box(HX * 2, 2, HZ * 2, 0, -1, 0, LC.floor, { studs: true });
-    box(CFG.courseWidth, 0.1, 38, 0, 0.05, HZ - 19, LC.sand, { studs: true, decor: true });
-    box(28, 0.1, 76, -44, 0.05, 0, LC.sand, { studs: true, decor: true });
-    box(28, 0.1, 96, 48, 0.05, 0, LC.sand, { studs: true, decor: true });
-
-    // Sandstone lower walls with blue stone above and crenellations on top
-    const wall = (sx, sz, x, z) => {
-        box(sx, LOWER, sz, x, LOWER / 2, z, LC.lower);
-        box(sx + 0.6, WALLH - LOWER, sz + 0.6, x, LOWER + (WALLH - LOWER) / 2, z, LC.stone);
-        const along = sx > sz, n = Math.floor((along ? sx : sz) / 8);
-        for (let i = 0; i < n; i++) {
-            const o = -(along ? sx : sz) / 2 + 4 + i * 8;
-            box(along ? 4 : sx + 1, 3, along ? sz + 1 : 4, x + (along ? o : 0), WALLH + 1.5, z + (along ? 0 : o), LC.stone, { decor: true });
-        }
-    };
-    const seg = HX - half;
-    wall(seg, 2, -(half + seg / 2), HZ + 1);
-    wall(seg, 2, half + seg / 2, HZ + 1);
-    wall(HX * 2 + 4, 2, 0, -HZ - 1);
-    wall(2, HZ * 2, -HX - 1, 0);
-    wall(2, HZ * 2, HX + 1, 0);
-    for (let x = -72; x <= 72; x += 24) {
-        if (Math.abs(x) > half + 4) {
-            box(4, LOWER, 2.4, x, LOWER / 2, HZ - 1.2, LC.pillar);
-            if (Math.abs(x + 12) > half + 6 && x + 12 < HX - 6) {
-                box(11, 20, 0.4, x + 12, 10, HZ - 0.2, LC.frame, { decor: true });
-                box(8, 17.5, 0.5, x + 12, 8.75, HZ - 0.3, LC.frameInner, { decor: true });
-            }
-        }
+    const P = POOL;
+    // Floor: brown stone everywhere, the blue pool in the middle with a yellow rim, sand by the gate
+    box(HX * 2, 2, HZ * 2, 0, -1, 0, LC.stone, { studs: true });
+    box(P.x1 - P.x0, 0.1, P.z1 - P.z0, (P.x0 + P.x1) / 2, 0.05, (P.z0 + P.z1) / 2, LC.pool, { studs: true, decor: true });
+    box(P.x1 - P.x0 + 2, 0.08, 1, (P.x0 + P.x1) / 2, 0.06, P.z0 - 0.5, LC.trim, { decor: true });
+    box(P.x1 - P.x0 + 2, 0.08, 1, (P.x0 + P.x1) / 2, 0.06, P.z1 + 0.5, LC.trim, { decor: true });
+    box(1, 0.08, P.z1 - P.z0, P.x0 - 0.5, 0.06, (P.z0 + P.z1) / 2, LC.trim, { decor: true });
+    box(1, 0.08, P.z1 - P.z0, P.x1 + 0.5, 0.06, (P.z0 + P.z1) / 2, LC.trim, { decor: true });
+    box(P.x1 - P.x0, 0.1, HZ - P.z1 - 1, (P.x0 + P.x1) / 2, 0.07, (P.z1 + 1 + HZ) / 2, LC.sand, { studs: true, decor: true });
+    for (let i = 0; i < 26; i++) {
+        const x = P.x0 + 4 + rng() * (P.x1 - P.x0 - 8), z = P.z0 + 4 + rng() * (P.z1 - P.z0 - 8);
+        if (Math.hypot(x - SPAWN.x, z - SPAWN.z) < 10) continue;
+        if (i % 3 === 0) crystals(rng, x, z); else coral(rng, x, z, 0.55);
     }
-    for (let z = -60; z <= 60; z += 20) {
-        box(2.4, LOWER, 4, -HX + 1.2, LOWER / 2, z, LC.pillar);
-        box(2.4, LOWER, 4, HX - 1.2, LOWER / 2, z, LC.pillar);
-        if (z < 60) {
-            box(0.4, 20, 11, -HX + 0.2, 10, z + 10, LC.frame, { decor: true });
-            box(0.5, 17.5, 8, -HX + 0.3, 8.75, z + 10, LC.frameInner, { decor: true });
-        }
-    }
-    // Atlantis skyline beyond the walls, light from the surface, kelp and coral inside
-    for (const [x, z, h, r] of [[-120, 40, 90, 7], [-110, -60, 75, 6], [120, -20, 95, 8], [105, 70, 70, 5], [-40, -115, 85, 7], [45, -120, 100, 8], [-70, 120, 72, 6], [75, 125, 80, 6]]) tower(x, z, h, r);
-    for (let i = 0; i < 9; i++) lightRay(-70 + i * 18, -50 + (i % 3) * 45, 10 + (i % 3) * 4, (i % 2 ? 1 : -1) * 0.12);
-    for (let x = -76; x <= 76; x += 13) { kelp(rng, x, HZ - 3.5, 10 + rng() * 10); kelp(rng, x + 5, -HZ + 3.5, 8 + rng() * 12); }
-    for (let z = -60; z <= 60; z += 15) { kelp(rng, -HX + 3.5, z, 10 + rng() * 12); }
-    for (const [x, z] of [[-26, 44], [26, 44], [-28, -40], [-32, 20], [30, -52], [-60, 58], [56, 60], [-8, -52]]) coral(rng, x, z, 1 + rng() * 0.4);
-    for (const [x, z] of [[-18, 30], [18, 30], [-30, -12], [12, -44], [34, 6]]) bubbleVent(x, 0.2, z);
+    for (let i = 0; i < 8; i++) kelp(rng, P.x0 + 6 + rng() * (P.x1 - P.x0 - 12), P.z0 + 6 + rng() * (P.z1 - P.z0 - 12), 3 + rng() * 3);
 
-    // Stage 1 gate arch
-    const arch = LC.lower, gz = HZ + 1;
-    for (const s of [-1, 1]) {
-        box(6, WALLH, 7, s * (half + 3), WALLH / 2, gz, arch);
-        box(6, 5, 7, s * (half - 3), 33.5, gz, arch, { decor: true });
-        box(5, 4, 7, s * (half - 8.5), 35, gz, arch, { decor: true });
-    }
-    box(CFG.courseWidth + 12, WALLH - 37, 7, 0, (WALLH + 37) / 2, gz, arch, { decor: true });
-    textPlane([{ t: 'ESCAPE THE OCEAN', c: '#28e0ff', s: '#16121f', px: 110 }], 36, 1024, new V3(0, 41, gz - 3.6), new V3(0, 41, gz - 20));
+    terraces(rng);
+    for (const [x, y, z, r] of [[-70, 30, -95], [5, 34, -100], [70, 30, -96], [-110, 28, 30], [112, 30, 34], [-62, 40, 102], [66, 38, 104], [-112, 26, -40]].map((a) => [...a, 6])) tower(x, y, z, r);
+    skyBubbles(rng);
 
-    // Spawn pad: white square with a black star
-    box(14, 0.3, 14, SPAWN.x, 0.15, SPAWN.z, 0xf6f6fa, { decor: true });
-    for (let i = 0; i < 8; i++) {
-        const a = i * Math.PI / 4, len = i % 2 ? 4.5 : 6.5;
-        const m = box(i % 2 ? 0.5 : 0.7, 0.06, len, 0, 0.32, 0, 0x141418, { decor: true });
-        m.position.set(SPAWN.x + Math.sin(a) * len / 2, 0.32, SPAWN.z + Math.cos(a) * len / 2); m.rotation.y = a; m.updateMatrix();
-    }
-    const ring = new T.Mesh(new T.RingGeometry(1.5, 2, 32), mat(0x141418));
-    ring.rotation.x = -Math.PI / 2; ring.position.set(SPAWN.x, 0.34, SPAWN.z); scene.add(ring);
-
-    // Fish shop (west): cheap fish in front, big ones on the raised back row
-    box(14, 5, 72, -HX + 7, 2.5, 0, LC.platform, { studs: true });
-    box(12, 1.5, 72, -HX + 20, 0.75, 0, LC.platform, { studs: true });
-    const rows = { 1: [], 2: [] };
-    for (const d of FISH) if (!d.special) rows[d.row].push(d);
-    const rowX = { 1: -HX + 20, 2: -HX + 7 }, rowY = { 1: 1.5, 2: 5 };
-    for (const r of [1, 2]) rows[r].forEach((d, i) => {
-        const z = (i - (rows[r].length - 1) / 2) * 13.5;
-        buildPedestal(d, new V3(rowX[r], rowY[r], z), new V3(1, 0, 0));
-    });
-    signBoard(new V3(-HX + 0.3, 37, 0), new V3(1, 0, 0), 30, 11, [{ t: 'FISH', c: '#ffffff', s: '#16121f', px: 150 }], LC.shopSign);
-    const specials = { Piranha: new V3(-24, 0, 12), SeaSerpent: new V3(-14, 0, -HZ + 22), Kraken: new V3(44, 0, -34) };
-    for (const d of FISH) if (d.special) {
-        const p = specials[d.id];
-        buildPedestal(d, p, new V3(-p.x, 0, -p.z).normalize());
+    // Spawn: sand pad with a brown frame and a black sun emblem
+    box(13, 0.3, 13, SPAWN.x, 0.15, SPAWN.z, 0x7a5a48, { decor: true });
+    box(11.4, 0.4, 11.4, SPAWN.x, 0.2, SPAWN.z, LC.sand, { studs: true, decor: true });
+    const sun = new T.Mesh(new T.CircleGeometry(1.6, 24), mat(0x141418)); sun.rotation.x = -Math.PI / 2; sun.position.set(SPAWN.x, 0.42, SPAWN.z); scene.add(sun);
+    for (let i = 0; i < 10; i++) {
+        const a = i * Math.PI / 5;
+        const ray = new T.Mesh(new T.ConeGeometry(0.6, 3.4, 3), mat(0x141418));
+        ray.scale.z = 0.05; ray.rotation.set(-Math.PI / 2, 0, -a + 0.35); ray.position.set(SPAWN.x + Math.sin(a) * 2.8, 0.43, SPAWN.z + Math.cos(a) * 2.8);
+        scene.add(ray);
     }
 
-    // Treadmills (east)
+    // Stage 1 building: a big stone block with the tunnel into the ocean
+    const half = CFG.courseWidth / 2, gz = HZ + 11, BH = 52;
+    for (const s of [-1, 1]) box(22, BH, 22, s * (half + 11), BH / 2, gz, LC.terrace, { studs: true });
+    box(CFG.courseWidth + 1, BH - 30, 22, 0, 30 + (BH - 30) / 2, gz, LC.terrace, { studs: true, decor: true });
+    box(CFG.courseWidth + 46, 1, 1, 0, 30, HZ - 0.4, LC.trim, { decor: true });
+    for (const s of [-1, 1]) box(1.2, 30, 1.2, s * (half + 0.2), 15, HZ - 0.4, LC.terraceDark, { decor: true });
+    box(CFG.courseWidth + 48, 3, 26, 0, BH + 1.5, gz, LC.terraceDark, { studs: true, decor: true });
+    box(CFG.courseWidth + 48, 0.8, 0.8, 0, BH + 3, HZ - 1.4, LC.trim, { decor: true });
+
+    // Speed pads between the gate and the treadmills
+    buyPad(-32, 60, 0xff4a8a, [{ t: '+10K SPEED', c: '#ffffff', s: '#16121f', px: 60 }], 'product', 'Speed10K');
+    buyPad(-40, 60, 0xff4a8a, [{ t: '+100K SPEED', c: '#ffffff', s: '#16121f', px: 60 }], 'product', 'Speed100K');
+    buyPad(-48, 60, 0xe8182c, [{ t: '+1M SPEED', c: '#ff5a5a', s: '#16121f', px: 60 }], 'product', 'Speed1M');
+
+    // FISH shop (left, +x): low front row, gold wall, and the back row up the stairs on top
+    const FX = 57, GX0 = 62, GX1 = 72, TOPY = 8;
+    box(10, 1, 108, FX, 0.5, -6, LC.stone, { studs: true });
+    box(GX1 - GX0, TOPY, 104, (GX0 + GX1) / 2, TOPY / 2, -2, LC.gold, { studs: true });
+    box(HX - GX1, TOPY, 120, (HX + GX1) / 2, TOPY / 2, -6, LC.stone, { studs: true });
+    box(0.6, 0.6, 104.4, GX0 - 0.1, TOPY + 0.3, -2, LC.goldDark, { decor: true });
+    // Stairs up from the south end of the front row
+    for (let i = 0; i < 7; i++) {
+        const h = (i + 1) * (TOPY / 7);
+        box(3.2, h, 10, 50 + i * 3 + 1.6 + 3, h / 2, -61, LC.stone, { studs: true });
+    }
+    const front = FISH.filter((d) => d.row === 1), back = FISH.filter((d) => d.row === 2);
+    front.forEach((d, i) => buildPedestal(d, new V3(FX, 1, -44 + i * 16)));
+    back.forEach((d, i) => buildPedestal(d, new V3((GX0 + GX1) / 2, TOPY, -46 + i * 15)));
+    gradientBanner('FISH', ['#1e8cff', '#0a4ac8'], 34, new V3(60, 30, -2), new V3(-1, 0, 0));
+
+    // Treadmills (right, -x) on a brown stone ledge, south to north: X25, four x1, X3, X9
     const bc = document.createElement('canvas'); bc.width = 64; bc.height = 64;
     const bx = bc.getContext('2d');
-    bx.fillStyle = '#2d2d34'; bx.fillRect(0, 0, 64, 64);
-    bx.fillStyle = '#3d3d46'; for (let i = 0; i < 4; i++) bx.fillRect(i * 16, 0, 6, 64);
+    bx.fillStyle = '#ffffff'; bx.fillRect(0, 0, 64, 64);
+    bx.fillStyle = '#b8b8c4'; for (let i = 0; i < 4; i++) bx.fillRect(i * 16, 0, 6, 64);
     beltTex = texFrom(bc); beltTex.wrapS = beltTex.wrapT = T.RepeatWrapping; beltTex.repeat.set(4, 1);
-    const top = TREAD_GEO.top;
-    box(22, top, 96, HX - 11, top / 2, 0, LC.platform, { studs: true });
-    box(3, 0.3, 96, HX - 23.5, 0.15, 0, LC.lavender, { neon: true, decor: true });
+    const top = TREAD_GEO.top, tz0 = TREAD_GEO.z0 - 7, tz1 = TREAD_GEO.z0 + (TREADMILLS.length - 1) * TREAD_GEO.step + 7;
+    box(HX + P.x0 - 1, top, tz1 - tz0, (-HX + P.x0 - 1) / 2, top / 2, (tz0 + tz1) / 2, LC.stone, { studs: true });
+    box(0.8, 0.3, tz1 - tz0, P.x0 - 1.6, top + 0.1, (tz0 + tz1) / 2, LC.trim, { decor: true });
     TREADMILLS.forEach((def, i) => buildTreadmill(def, TREAD_GEO.cx, top, TREAD_GEO.z0 + i * TREAD_GEO.step));
-    signBoard(new V3(HX - 0.3, 37, 0), new V3(-1, 0, 0), 44, 10, [{ t: 'AUTO-TRAIN', c: '#ffffff', s: '#16121f', px: 130 }], LC.treadSign);
-    textPlane([{ t: 'TREADMILLS', c: '#ffffff', s: '#16121f', px: 110 }, { t: 'Earn Speed every second you run!', c: '#ffd228', s: '#16121f', px: 56 }], 30, 1024, new V3(HX - 4, 28, 0), new V3(0, 28, 0));
+    gradientBanner('AUTO-TRAIN', ['#f4ff5a', '#6fff3a'], 32, new V3(TREAD_GEO.cx + 8, 22, (tz0 + tz1) / 2), new V3(1, 0, 0));
 
-    // Stage portals (south wall)
-    const lt = 1.5;
-    box(100, lt, 12, 0, lt / 2, -HZ + 6, LC.platform, { studs: true });
-    PORTALS.forEach((p, i) => {
-        const x = (i - 2) * 20, wz = -HZ + 0.6;
-        box(10, 13, 1, x, lt + 6.5, wz, LC.portal, { neon: true, decor: true });
-        const archM = new T.Mesh(new T.CylinderGeometry(5, 5, 1, 24, 1, false, 0, Math.PI), mat(LC.portal, { neon: true }));
-        archM.rotation.set(Math.PI / 2, 0, Math.PI / 2, 'ZYX'); archM.position.set(x, lt + 13, wz); scene.add(archM);
-        box(12, 1, 1.4, x, lt + 0.5, wz + 0.5, 0xc8a01e, { decor: true });
-        billboard([{ t: 'Stage ' + p.stage, c: '#ffffff', s: '#16121f', px: 72 }, { t: '🏆 ' + fmt(p.req) + ' Wins', c: '#ffd028', s: '#16121f', px: 54 }], 9, 512, new V3(x, lt + 20, wz + 2));
-        const tr = aabb(x, lt + 8, wz + 2.5, 10, 16, 4);
-        tr.enter = () => actions.portal(p);
-        triggers.push(tr);
-    });
-
-    // Golden Megalodon statue on the speed boost pad
-    const bp = new V3(22, 0, -HZ + 20);
-    const pad = new T.Mesh(new T.CylinderGeometry(6, 6, 0.4, 32), mat(0xffd028, { neon: true }));
-    pad.position.set(bp.x, 0.2, bp.z); scene.add(pad);
-    const statue = buildFish(fishById.Megalodon, { gold: true });
-    statue.position.set(bp.x, 1.2, bp.z); statue.rotation.set(-0.35, Math.atan2(-bp.x, -bp.z), 0); scene.add(statue);
-    tickers.push((dt, t) => { swimFish(statue, dt, false); statue.position.y = 1.4 + Math.sin(t * 1.2) * 0.4; });
-    billboard([{ t: 'SPEED BOOST', c: '#ffd028', s: '#16121f', px: 76 }, { t: 'x2 Speed for 15 min', c: '#ffffff', s: '#16121f', px: 48 }, { t: buxText(PRODUCTS.SpeedBoost.price), c: '#ffd23a', s: '#16121f', px: 52 }], 14, 512, new V3(bp.x, 14, bp.z));
-    const btr = aabb(bp.x, 3.5, bp.z, 12, 7, 12);
-    btr.enter = () => actions.buy('product', 'SpeedBoost');
-    triggers.push(btr);
-
-    // Leaderboards either side of the Stage 1 gate
-    boards.speed = leaderboard(new V3(-36, 0, HZ - 18), 'Top Speed', 0x286ee6);
-    boards.wins = leaderboard(new V3(36, 0, HZ - 18), 'Top Wins', 0xff8c1e);
-
-    treasureChest(new V3(-62, 0, HZ - 10), new V3(0.6, 0, -1).normalize());
-    treasureChest(new V3(-62, 0, -HZ + 10), new V3(0.6, 0, 1).normalize());
+    // Back right corner: the hut, the Group Chest, the turtle, Wins pads and the leaderboards
+    boostHut(new V3(-70, 0, -20));
+    groupChest(new V3(-68, 0, -36));
+    billboard([{ t: 'Group Chest', c: '#ffd028', s: '#16121f', px: 80 }, { t: 'Like the game + claim daily!', c: '#ffe07a', s: '#16121f', px: 44 }], 14, 512, new V3(-68, 13, -36));
+    turtlePad(new V3(-48, 0, -44));
+    buyPad(-30, -60, 0xffd028, [{ t: '+500 WINS', c: '#ffd028', s: '#16121f', px: 60 }], 'product', 'Wins500');
+    buyPad(-38, -64, 0xffd028, [{ t: '+5K WINS', c: '#ffd028', s: '#16121f', px: 60 }], 'product', 'Wins5K');
+    boards.speed = leaderboard(new V3(-56, 0, -63), 'Most Speed', new V3(0.5, 0, 1).normalize());
+    boards.wins = leaderboard(new V3(-76, 0, -54), 'Most Wins', new V3(1, 0, 0.6).normalize());
 }
 
 // =====================================================================================
@@ -467,8 +551,10 @@ function chevrons(z0, count) {
         textPlane([{ t: '^', c: '#ffffff', px: 180 }], 6, 256, new V3(0, 0.06, z0 + i * 8), new V3(0, 10, z0 + i * 8)).rotation.set(-Math.PI / 2, 0, Math.PI);
     }
 }
-function stageSigns(s) {
-    textPlane([{ t: s.name, c: '#ffffff', s: '#16121f', px: 150 }, { t: s.sub, c: s.subColor, s: '#16121f', px: 120 }], 30, 1024, new V3(0, 33.5, s.zS + 0.2), new V3(0, 33.5, s.zS - 10));
+function stageSigns(s, idx) {
+    // Stage 1's title floats in front of the tunnel, like the reference; the others sit on the lintel
+    const y = idx ? 33.5 : 20, z = idx ? s.zS + 0.2 : s.zS - 5;
+    textPlane([{ t: s.name, c: '#ffffff', s: '#16121f', px: 150 }, { t: s.sub, c: s.subColor, s: '#16121f', px: 120 }], 30, 1024, new V3(0, y, z), new V3(0, y, z - 10));
     const pz = s.zS + 22;
     box(0.4, 5, 12, -CFG.courseWidth / 2 + 0.2, 8, pz, CC.plaque, { decor: true });
     textPlane([{ t: 'Recommended :', c: '#ffffff', s: '#16121f', px: 60 }, { t: 'Lvl : ' + s.rec, c: '#ffd028', s: '#16121f', px: 70 }], 10, 512, new V3(-CFG.courseWidth / 2 + 0.5, 8, pz), new V3(10, 8, pz));
@@ -574,9 +660,9 @@ function buildChase(i, s, rng, z0, z1) {
     for (let n = 0; n < 9; n++) addPickup(i, (rng() * 2 - 1) * 16, 0, z0 + 20 + (len - 30) * n / 8, s.pickup);
     // The Megalodon that chases this player (local only; each player gets their own)
     const m = new T.Group();
-    const jaws = { ...fishById.Megalodon, size: 7 };
+    const jaws = { ...SHARK_LOOK, size: 7 };
     const big = buildFish(jaws); m.add(big);
-    for (const sx of [-1, 1]) { const f = buildFish({ ...fishById.Megalodon, size: 4 }); f.position.set(sx * 14, 2, -8); m.add(f); }
+    for (const sx of [-1, 1]) { const f = buildFish({ ...SHARK_LOOK, size: 4 }); f.position.set(sx * 14, 2, -8); m.add(f); }
     m.visible = false; scene.add(m);
     // Length from the group origin to the Megalodon's nose
     m.userData.nose = (5.4 / 2 + 1.8 + 1) * big.userData.inner.scale.z;
@@ -619,7 +705,7 @@ function buildCourse() {
         doubleWinsPad(10, s.cE + 22);
         treasureChest(new V3(W / 2 - 5, 0, s.cE + 40), new V3(-1, 0, 0));
         coral(rng, -W / 2 + 4, s.cE + 40, 1.2);
-        stageSigns(s);
+        stageSigns(s, idx);
         stageGate(s, idx);
         const tr = aabb(0, 20, s.zS + 3, W, 60, 2);
         tr.enter = () => actions.enterStage(idx);

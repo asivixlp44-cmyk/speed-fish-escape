@@ -1,8 +1,8 @@
 import { T, UNIT, mat } from './engine.js';
 
 // Blocky fish built from boxes, facing +Z with the belly just above y = 0.
-// userData: seat (y of the rider's saddle), tail (group that wiggles), segs/arms for
-// serpents and krakens, and len (body length) so callers can place things around it.
+// userData: seat (y of the rider's saddle), tail (group that wiggles), and segs/flips for
+// the serpent's body and the turtle's flippers.
 
 const EYE_W = 0xffffff, EYE_B = 0x141418, TOOTH = 0xfffff0;
 const CONE = new T.ConeGeometry(0.5, 1, 6);
@@ -132,40 +132,61 @@ const SHAPES = {
         eyes(part, b.head, 1.55, 0.3, 0.65, 0.5);
         return b;
     },
-    ray(g, part, d) {
-        const body = part(4.6, 0.8, 4.6, 0, 1, 0, d.body); body.rotation.y = Math.PI / 4;
-        const under = part(4.2, 0.2, 4.2, 0, 0.55, 0, d.belly); under.rotation.y = Math.PI / 4;
-        const head = new T.Group(); head.position.set(0, 1, 2.6); g.add(head);
-        part(1.4, 0.7, 1, 0, 0, 0, d.body, head);
-        for (const s of [-1, 1]) {
-            part(0.35, 0.3, 0.35, s * 0.55, 0.45, 0.1, EYE_W, head);
-            part(0.2, 0.2, 0.2, s * 0.55, 0.55, 0.22, EYE_B, head);
-        }
-        const tl = new T.Group(); tl.position.set(0, 1, -3); g.add(tl);
-        part(0.2, 0.2, 4.4, 0, 0, -2.1, d.fin, tl);
-        cone(tl, 0.2, 0.8, 0, 0.3, -1.4, 0xe0e0e0);
-        for (let i = 0; i < 5; i++) part(0.5, 0.1, 0.5, (i % 2 ? 1 : -1) * 0.9, 1.45, 0.8 - i * 0.6, d.fin);
-        return { head, tail: tl, top: 1.4 };
-    },
-    hammer(g, part, d) {
+    // Whale shark: broad flat head, navy back covered in white spots
+    whale(g, part, d) {
         const b = SHAPES.shark(g, part, d, true);
-        part(4.6, 0.6, 1, 0, 0.1, 1.5, d.body, b.head);
-        const dorsal = part(0.3, 2, 1.6, 0, 3.3, 0, d.fin); dorsal.rotation.x = -0.45;
-        for (const s of [-1, 1]) {
-            part(0.3, 0.45, 0.45, s * 2.35, 0.1, 1.6, EYE_W, b.head);
-            part(0.32, 0.25, 0.25, s * 2.4, 0.1, 1.72, EYE_B, b.head);
+        part(2.4, 0.9, 1.4, 0, -0.1, 1.6, d.body, b.head);
+        part(2.2, 0.25, 1.2, 0, -0.55, 1.7, 0x0c1238, b.head);
+        const dorsal = part(0.3, 1.8, 1.6, 0, 3.1, -0.4, d.fin); dorsal.rotation.x = -0.5;
+        for (let i = 0; i < 6; i++) for (let j = 0; j < 3; j++) {
+            part(0.32, 0.12, 0.32, (j - 1) * 0.7, 2.66, 2.1 - i * 0.85, d.stripe);
+            for (const sd of [-1, 1]) part(0.1, 0.32, 0.32, sd * 1.12, 1.4 + j * 0.45 - 0.2, 2.1 - i * 0.85 + (j % 2) * 0.4, d.stripe);
+        }
+        for (const sd of [-1, 1]) for (let i = 0; i < 3; i++) part(0.08, 1.4, 0.12, sd * 1.12, 1.2, 1.9 - i * 0.3, 0x0c1238);
+        return b;
+    },
+    // Leviathan: teal sea dragon-shark with a spiked back and glowing pink fins
+    leviathan(g, part, d) {
+        const b = SHAPES.shark(g, part, d);
+        for (let i = 0; i < 6; i++) cone(g, 0.28, 1.4 - i * 0.12, 0, 3.1 - i * 0.05, 2 - i * 0.9, d.fin, -0.5);
+        for (const sd of [-1, 1]) {
+            const fin = part(0.12, 1.6, 2, sd * 1.5, 1.6, 0.2, d.glow, null, { neon: true }); fin.rotation.z = sd * 0.7;
+            const horn = part(0.22, 1.4, 0.22, sd * 0.6, 1.1, 0.6, d.fin, b.head); horn.rotation.x = -0.9;
+        }
+        for (let i = 0; i < 5; i++) part(2.26, 0.12, 0.5, 0, 0.72, 2 - i * 0.9, 0xe8d8b0);
+        return b;
+    },
+    // Abyss King: dark spiky monster with glowing pink seams and a mouth full of fangs
+    abyss(g, part, d) {
+        const b = fishBody(g, part, d, { L: 4.4, H: 3.4, W: 3, y: 2, headL: 1.8, tailH: 1.1 });
+        part(2.8, 0.9, 1.4, 0, -1.2, 1.2, 0x3a0a2a, b.head);
+        teeth(part, b.head, 2.7, -0.8, 1.85, 8, 0.7, false);
+        teeth(part, b.head, 2.7, -0.2, 1.85, 8, 0.7, true);
+        for (let i = 0; i < 7; i++) cone(g, 0.3, 1.6, (i % 2 ? 0.6 : -0.6), 4, 2 - i * 0.7, 0x0a0610, -0.4);
+        for (const sd of [-1, 1]) {
+            for (let i = 0; i < 4; i++) part(0.08, 0.2, 0.9, sd * 1.52, 1.4 + i * 0.5, 1 - i * 0.6, d.glow, null, { neon: true });
+            part(0.1, 0.45, 0.6, sd * 1.32, 0.55, 0.9, d.glow, b.head, { neon: true });
         }
         return b;
     },
-    angler(g, part, d) {
-        const b = fishBody(g, part, d, { L: 3.6, H: 3, W: 2.6, y: 1.8, headL: 1.6 });
-        part(2.3, 0.7, 1, 0, -1.1, 1.3, d.belly, b.head);
-        teeth(part, b.head, 2.2, -0.75, 1.72, 7, 0.55, false);
-        teeth(part, b.head, 2.2, 0.1, 1.72, 7, 0.5, true);
-        const stalk = part(0.15, 0.15, 2.2, 0, 1.9, 1.3, d.fin, b.head); stalk.rotation.x = 0.5;
-        part(0.6, 0.6, 0.6, 0, 2.5, 2.5, d.glow, b.head, { neon: true });
-        eyes(part, b.head, 2.3, 0.6, 0.6, 0.4, true);
-        return b;
+    // Blood Jaws: a giant red head that is mostly mouth
+    jaws(g, part, d) {
+        const head = new T.Group(); head.position.set(0, 2.6, 0.8); g.add(head);
+        part(3.6, 1.4, 4, 0, 1.3, 0, d.body, head);
+        part(3.6, 1.1, 3.6, 0, -1.5, 0.1, d.body, head);
+        part(3.2, 1.6, 3.2, 0, -0.1, -0.2, 0x5a0610, head);
+        part(2.6, 0.5, 2.4, 0, -0.9, 0, 0xff6a8a, head);
+        teeth(part, head, 3.4, 0.6, 1.95, 9, 0.9, true);
+        teeth(part, head, 3.4, -0.9, 1.95, 9, 0.9, false);
+        for (const sd of [-1, 1]) {
+            for (let i = 0; i < 4; i++) { const t = part(0.18, 0.7, 0.18, sd * 1.7, 0.6, 1.4 - i * 0.8, TOOTH, head); t.rotation.z = 0.785; }
+            part(0.12, 0.8, 0.8, sd * 1.82, 1.6, 1, 0xffffff, head);
+            part(0.14, 0.4, 0.4, sd * 1.86, 1.55, 1.15, EYE_B, head);
+            const fin = part(0.2, 1.6, 1.4, sd * 1.4, 2.6, -0.8, d.fin); fin.rotation.z = sd * 0.5;
+        }
+        const tl = new T.Group(); tl.position.set(0, 2.4, -1.3); g.add(tl);
+        tail(part, tl, 2.6, 2.2, d.fin, 0.6);
+        return { head, tail: tl, top: 4.9 };
     },
     orca(g, part, d) {
         const b = SHAPES.shark(g, part, d, true);
@@ -211,41 +232,35 @@ const SHAPES = {
         g.userData.segs = segs;
         return { head, tail: null, top: 2.5 };
     },
-    kraken(g, part, d) {
-        const head = new T.Group(); head.position.set(0, 2.6, 0); g.add(head);
-        part(3.4, 2.6, 3.2, 0, 0.3, 0, d.body, head);
-        part(2.8, 1, 2.6, 0, 1.9, -0.3, d.body, head);
-        part(3.5, 0.4, 3.3, 0, -0.9, 0, d.belly, head);
-        for (let i = 0; i < 6; i++) part(0.5, 0.5, 0.2, -1.2 + i * 0.5, 0.6 + (i % 2) * 0.6, -1.62, d.belly, head);
-        eyes(part, head, 3.4, 0.2, 0.9, 0.9, true);
-        const arms = [];
-        for (let i = 0; i < 8; i++) {
-            const a = i / 8 * Math.PI * 2 + Math.PI / 8;
-            const arm = new T.Group(); arm.position.set(Math.sin(a) * 1.4, 1.5, Math.cos(a) * 1.4); arm.rotation.y = a; g.add(arm);
-            let parent = arm;
-            for (let k = 0; k < 4; k++) {
-                const seg = new T.Group(); seg.position.z = k ? 0.9 : 0; parent.add(seg);
-                part(0.7 - k * 0.12, 0.6 - k * 0.1, 1, 0, 0, 0.45, k % 2 ? d.fin : d.body, seg);
-                part(0.25, 0.15, 0.25, 0, -0.3, 0.45, d.belly, seg);
-                parent = seg;
-                arm.userData['s' + k] = seg;
-            }
-            arms.push(arm);
+    // Sea turtle: patterned shell to sit on, flippers that paddle
+    turtle(g, part, d) {
+        part(3.6, 1.2, 4.4, 0, 1.4, 0, d.fin);
+        part(3.2, 0.8, 3.8, 0, 2.3, 0, d.body);
+        part(2.2, 0.5, 2.6, 0, 2.9, 0, d.body);
+        for (const [x, z] of [[0, 0], [-0.9, 1], [0.9, 1], [-0.9, -1], [0.9, -1]]) part(0.8, 0.12, 0.8, x, 3.2, z, d.fin);
+        part(3.4, 0.4, 4.2, 0, 0.75, 0, d.belly);
+        const head = new T.Group(); head.position.set(0, 1.8, 2.4); g.add(head);
+        part(1.3, 1.1, 1.6, 0, 0, 0.6, 0x7aec5a, head);
+        eyes(part, head, 1.3, 0.2, 0.9, 0.35);
+        const flips = [];
+        for (const [x, z, big] of [[-1, 1, 1], [1, 1, 1], [-1, -1, 0], [1, -1, 0]]) {
+            const p = new T.Group(); p.position.set(x * 1.7, 1.1, z * 1.3); g.add(p);
+            part(big ? 2.2 : 1.2, 0.25, big ? 1 : 0.8, x * (big ? 1 : 0.5), 0, 0, 0x7aec5a, p);
+            p.userData.side = x;
+            flips.push(p);
         }
-        g.userData.arms = arms;
-        return { head, tail: null, top: 4.4 };
+        g.userData.flips = flips;
+        return { head, tail: null, top: 3.3 };
     },
 };
 
-// Builds a new fish group for a catalogue entry (fishById[...]); gold turns it into a statue
-export function buildFish(d, o) {
-    o = o || {};
+// Builds a new fish group for a catalogue entry (fishById[...])
+export function buildFish(d) {
     const g = new T.Group();
     const inner = new T.Group(); g.add(inner);
-    const def = o.gold ? { ...d, body: 0xffcd32, belly: 0xffe07a, fin: 0xe0a010, stripe: 0xfff0a0, glow: 0xffffff } : d;
     const part = maker(inner);
     const shape = SHAPES[d.shape] || SHAPES.clown;
-    const b = shape(inner, part, def);
+    const b = shape(inner, part, d);
     // Mounts read about as long as the rider is tall, like the reference
     const size = (d.size || 1) * MOUNT_SCALE;
     inner.scale.setScalar(size);
@@ -254,7 +269,7 @@ export function buildFish(d, o) {
     g.userData.head = b.head;
     g.userData.seat = b.top * size;
     g.userData.segs = inner.userData.segs;
-    g.userData.arms = inner.userData.arms;
+    g.userData.flips = inner.userData.flips;
     g.userData.phase = Math.random() * 6;
     return g;
 }
@@ -270,7 +285,5 @@ export function swimFish(g, dt, moving) {
     u.inner.position.y = Math.sin(u.phase * 0.5) * (moving ? 0.12 : 0.2);
     u.inner.rotation.z = Math.sin(u.phase * 0.5) * 0.04;
     if (u.segs) u.segs.forEach((sg, i) => { sg.position.x = Math.sin(u.phase - i * 0.7) * (0.25 + i * 0.1); sg.rotation.y = Math.cos(u.phase - i * 0.7) * 0.25; });
-    if (u.arms) u.arms.forEach((a, i) => {
-        for (let k = 0; k < 4; k++) a.userData['s' + k].rotation.x = 0.25 + Math.sin(u.phase * 0.6 + i + k * 0.8) * 0.25 + k * 0.1;
-    });
+    if (u.flips) u.flips.forEach((p, i) => { p.rotation.z = p.userData.side * Math.sin(u.phase * 0.5 + i) * 0.4; });
 }

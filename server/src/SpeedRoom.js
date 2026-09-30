@@ -3,7 +3,8 @@ import { GameState, PlayerState } from './schema.js';
 import { getProfile, markDirty, allProfiles, saveProfiles, adoptGuestProgress } from './profiles.js';
 import { verifyBloxityToken, BUX_MODE } from './bloxity.js';
 import {
-    CFG, STAGES, PORTALS, PRODUCTS, PASSES, FISH, fishById, AURAS, auraById, FREE, DAILY, KITS, SKINS,
+    CFG, LOBBY, STAGES, PRODUCTS, PASSES, FISH, fishById, AURAS, auraById, FREE, DAILY, KITS, SKINS,
+    GROUP_CHEST, TURTLE_MINUTES, FREE_BOOST_MINUTES,
     xpFor, maxSpeedFor, speedMult, treadmillAt, stageAt, dailyStatus, dayKey, rewardText, fmt, clamp,
 } from '../../shared/config.js';
 
@@ -37,7 +38,9 @@ export class SpeedRoom extends Room {
         this.onMessage('move', (client, m) => this.onMove(client, m));
         this.onMessage('pickup', (client, m) => this.onPickup(client, m));
         this.onMessage('pad', (client, m) => this.onPad(client, m));
-        this.onMessage('portal', (client, m) => this.onPortal(client, m));
+        this.onMessage('chest', (client) => this.onChest(client));
+        this.onMessage('turtle', (client) => this.onTurtle(client));
+        this.onMessage('freeBoost', (client) => this.onFreeBoost(client));
         this.onMessage('shop', (client, m) => this.onShop(client, m));
         this.onMessage('aura', (client, m) => this.onAura(client, m));
         this.onMessage('rebirth', (client) => this.onRebirth(client));
@@ -73,7 +76,7 @@ export class SpeedRoom extends Room {
         const player = new PlayerState();
         player.name = profile.name;
         player.av = cleanAvatar(options.av);
-        player.x = 0; player.y = 0.5; player.z = -14; player.ry = 0;
+        player.x = LOBBY.spawn.x; player.y = LOBBY.spawn.y; player.z = LOBBY.spawn.z; player.ry = 0;
         player.kit = this.joinCount % KITS.length;
         player.skin = (this.joinCount * 3) % SKINS.length;
         this.joinCount++;
@@ -113,6 +116,7 @@ export class SpeedRoom extends Room {
             owned: p.owned, equipped: p.equipped, auras: p.auras, aura: p.aura, passes: p.passes,
             boostUntil: p.boostUntil, customSpeed: p.customSpeed, claimedPack: p.claimedPack,
             firstPlay: p.firstPlay, freeClaimed: s.freeClaimed, joinedAt: s.joinedAt, daily: p.daily,
+            chestAt: p.chestAt, freeBoost: !!s.freeBoost,
         });
     }
     toast(s, text, color) { s.client.send('toast', { text, color }); }
@@ -239,13 +243,43 @@ export class SpeedRoom extends Room {
         client.send('wins', { n: got });
     }
 
-    onPortal(client, m) {
+    // Group Chest in the lobby: once every GROUP_CHEST.hours
+    onChest(client) {
         const s = this.sessions.get(client.sessionId);
-        const portal = m && PORTALS.find((p) => p.stage === (m.stage | 0));
-        if (!s || !portal) return;
-        if (portal.stage > STAGES.length) return this.toast(s, 'Coming soon!', BLUE);
-        if (s.profile.wins < portal.req) return this.toast(s, 'Need ' + fmt(portal.req - s.profile.wins) + ' more Wins!', RED);
-        client.send('portalOk', { stage: portal.stage });
+        if (!s) return;
+        const p = s.profile, left = (p.chestAt || 0) + GROUP_CHEST.hours * 3600000 - Date.now();
+        if (left > 0) return this.toast(s, 'Chest refills in ' + Math.ceil(left / 3600000) + 'h', BLUE);
+        p.chestAt = Date.now();
+        this.addSpeed(s, GROUP_CHEST.speed, false);
+        this.addWins(s, GROUP_CHEST.wins, false);
+        this.toast(s, 'Group Chest! +' + fmt(GROUP_CHEST.speed) + ' Speed & +' + GROUP_CHEST.wins + ' Wins', GOLD);
+        client.send('fx', { kind: 'confetti' });
+        this.changed(client.sessionId);
+    }
+    // The turtle is free after TURTLE_MINUTES of play in this session
+    onTurtle(client) {
+        const s = this.sessions.get(client.sessionId);
+        if (!s) return;
+        const p = s.profile;
+        if (p.owned.Turtle) return this.onShop(client, { id: 'Turtle' });
+        if ((Date.now() - s.joinedAt) / 60000 < TURTLE_MINUTES) return this.toast(s, 'Keep playing to claim the turtle!', BLUE);
+        p.owned.Turtle = true;
+        p.equipped = 'Turtle';
+        this.toast(s, 'Claimed the Sea Turtle! +' + fishById.Turtle.bonus + '/Speed', GREEN);
+        client.send('fx', { kind: 'confetti' });
+        this.changed(client.sessionId);
+    }
+    // "Keep playing" hut: one free timed Speed Boost per session
+    onFreeBoost(client) {
+        const s = this.sessions.get(client.sessionId);
+        if (!s || s.freeBoost) return;
+        if ((Date.now() - s.joinedAt) / 60000 < FREE_BOOST_MINUTES) return;
+        s.freeBoost = true;
+        const p = s.profile;
+        p.boostUntil = Math.max(Date.now(), p.boostUntil) + CFG.boostMinutes * 60000;
+        this.toast(s, 'FREE x2 Speed Boost!', GOLD);
+        client.send('fx', { kind: 'confetti' });
+        this.changed(client.sessionId);
     }
 
     onShop(client, m) {
@@ -255,7 +289,7 @@ export class SpeedRoom extends Room {
         const p = s.profile;
         if (p.owned[d.id]) {
             if (p.equipped !== d.id) { p.equipped = d.id; this.toast(s, 'Now riding ' + d.name + '!', BLUE); }
-        } else if (d.pass) {
+        } else if (d.pass || d.timed) {
             return;
         } else if (p.wins < d.req) {
             return this.toast(s, 'Need ' + fmt(d.req - p.wins) + ' more Wins!', RED);

@@ -24,7 +24,7 @@ export function defaultProfile(uid, name) {
         speed: 0, wins: 0, level: 1, xp: 0, rebirths: 0,
         owned: { Clownfish: true }, equipped: 'Clownfish', daily: {},
         auras: {}, aura: '', passes: {},
-        boostUntil: 0, customSpeed: 0, claimedPack: false,
+        boostUntil: 0, customSpeed: 0, claimedPack: false, chestAt: 0,
         firstPlay: Date.now(),
     };
 }

@@ -26,13 +26,12 @@ For development, run `npm run dev:server` and `npm run dev:client` in two termin
 
 ## Gameplay
 
-- **You ride a fish.** Your equipped fish swims under you; better fish add more Speed per step (`+1/Speed` up to `+25K/Speed`).
-- **Lobby (Atlantis plaza)**:
-  - North: the Stage 1 gate "ESCAPE THE OCEAN" with the Top Speed and Top Wins boards.
-  - West: the **FISH** shop. The front row is cheap fish (Clownfish, Pufferfish, Red Snapper, Lionfish); the raised back row is big fish (Swordfish up to Megalodon). Fish unlock with Wins.
-  - Pass fish stand on their own pedestals: Piranha ("Cheap Fish", 9 Bux), Sea Serpent and Kraken.
-  - East: eight auto-train treadmills (x25 and x9 are passes, x3 needs 5 Wins).
-  - South: stage portals that skip ahead once you have enough Wins, and the golden Megalodon SPEED BOOST pad.
+- **You ride a fish.** Your equipped fish swims under you; better fish add more Speed per step (`+1/Speed` up to `+5K/Speed`).
+- **Lobby**, built from `reference/lobby.mp4`: an open Atlantis plaza under a night-blue sky, ringed by stepped stone terraces with yellow trim and gold towers with pink domes.
+  - Middle: a blue studded pool with coral, crystals and kelp, and the sand spawn pad with a black sun emblem.
+  - Ahead: the Stage 1 "ESCAPE THE OCEAN" tunnel, with +10K / +100K / +1M Speed pads beside it.
+  - Left: the **FISH** shop. The low front row has Clownfish, Pufferfish, Red Snapper, Lionfish, Piranha ("Cheap Fish", 9 Bux) and OP Serpent (Bux). Stairs lead up to the raised back row: Blue Marlin, Orca, Whale Shark, Great White, Leviathan, Abyss King and Blood Jaws. Walk onto a fish's yellow pad to unlock or ride it.
+  - Right: **AUTO-TRAIN** treadmills (X25 and X9 are passes, X3, four x1), the "Keep playing" hut (a free x2 Speed Boost after 15 minutes), the Group Chest (free Speed and Wins once a day), the +150/Speed Sea Turtle (free after 20 minutes), +500 / +5K Wins pads, and the Most Speed / Most Wins stone boards.
 - **Course**, six stages:
   1. ESCAPE THE OCEAN: a water lane between lava, ice-crystal spikes and rolling sea mines.
   2. Crushing Rocks: stone slabs that slam down.

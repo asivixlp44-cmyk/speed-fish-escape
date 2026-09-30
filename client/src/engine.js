@@ -13,10 +13,29 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = T.PCFShadowMap;
 
 export const scene = new T.Scene();
-// Deep ocean blue: the lobby is open to the "sky" (the sea above Atlantis)
-const FOG = 0x0f3f86;
-scene.background = new T.Color(FOG);
-scene.fog = new T.Fog(FOG, 160, 440);
+// Night-blue sky over the open lobby: dark at the top, lighter at the horizon, with a moon glow
+const FOG = 0x2a5cc0;
+scene.background = (() => {
+    const c = document.createElement('canvas'); c.width = 4; c.height = 256;
+    const x = c.getContext('2d');
+    const g = x.createLinearGradient(0, 0, 0, 256);
+    g.addColorStop(0, '#061640'); g.addColorStop(0.55, '#123a96'); g.addColorStop(1, '#2a5cc0');
+    x.fillStyle = g; x.fillRect(0, 0, 4, 256);
+    const t = new T.CanvasTexture(c); t.colorSpace = T.SRGBColorSpace;
+    return t;
+})();
+scene.fog = new T.Fog(FOG, 180, 520);
+{
+    const c = document.createElement('canvas'); c.width = c.height = 128;
+    const x = c.getContext('2d');
+    const g = x.createRadialGradient(64, 64, 0, 64, 64, 64);
+    g.addColorStop(0, 'rgba(255,255,255,0.95)'); g.addColorStop(0.12, 'rgba(220,235,255,0.8)'); g.addColorStop(0.4, 'rgba(150,190,255,0.25)'); g.addColorStop(1, 'rgba(120,160,255,0)');
+    x.fillStyle = g; x.fillRect(0, 0, 128, 128);
+    const t = new T.CanvasTexture(c); t.colorSpace = T.SRGBColorSpace;
+    const moon = new T.Sprite(new T.SpriteMaterial({ map: t, transparent: true, depthWrite: false, fog: false, blending: T.AdditiveBlending, toneMapped: false }));
+    moon.scale.setScalar(160); moon.position.set(-120, 330, -380);
+    scene.add(moon);
+}
 
 export const camera = new T.PerspectiveCamera(70, 1, 0.3, 700);
 function resize() {

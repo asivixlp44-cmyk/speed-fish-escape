@@ -4,10 +4,10 @@ export const S = {
     speed: 0, wins: 0, level: 1, xp: 0, rebirths: 0,
     owned: { Clownfish: true }, equipped: 'Clownfish', auras: {}, aura: '', passes: {}, daily: null,
     boostUntil: 0, customSpeed: 0, claimedPack: false, firstPlay: Date.now(),
-    freeClaimed: {}, joinedAt: Date.now(), name: '',
+    freeClaimed: {}, joinedAt: Date.now(), name: '', chestAt: 0, freeBoost: false,
 };
 
-// Game actions that world objects (pads, fish pedestals, portals) trigger; filled in by main.js
+// Game actions that world objects (pads, fish pedestals, chests) trigger; filled in by main.js
 export const actions = {};
 
 export const net = {

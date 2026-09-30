@@ -12,13 +12,13 @@ import { createAvatar, loadBase, packAvatar, unpackAvatar, avatarStats } from '.
 import { updateMaterials } from './textures.js';
 import { pad, pollGamepad, rumble, onGamepadConnection } from './gamepad.js';
 import { render, setSpeedLines, updateFx, dust, sparkleColumn, ring, fireworks, setQuality, bubble } from './fx.js';
-import { buildWorld, SPAWN, pickups, beltTex, refreshShop, renderBoards, treadLocked, updateSlabs, gatePulse, updateGates } from './world.js';
+import { buildWorld, SPAWN, pickups, beltTex, refreshShop, renderBoards, treadLocked, updateSlabs, gatePulse, updateGates, updateLobbySigns } from './world.js';
 import {
     updateHud, toast, levelUp, showStageTitle, buy, showRevive, hideRevive, closeModal, openModal,
     refreshModal, promptEl, promptTxtEl, showGoal, animateCounters,
 } from './ui.js';
 import {
-    CFG, STAGES, fishById, auraById, KITS, SKINS, STARTER_FISH, maxSpeedFor, fmt, clamp,
+    CFG, STAGES, fishById, auraById, KITS, SKINS, STARTER_FISH, SHARK_LOOK, maxSpeedFor, fmt, clamp,
 } from '../../shared/config.js';
 
 // =====================================================================================
@@ -226,7 +226,7 @@ function updateBalls() {
 
 // Sharks swim across the lane; touching one is a KO. The top of a jump clears them.
 const sharks = [];
-const HAZARD_SHARK = { ...fishById.Megalodon, id: 'hazardShark', size: 1.45 };
+const HAZARD_SHARK = { ...SHARK_LOOK, size: 1.45 };
 function spawnShark(m) {
     const s = STAGES[m.s];
     if (!s || s.type !== 'Sharks') return;
@@ -293,7 +293,9 @@ actions.pad = (idx) => {
     net.send('pad', { s: idx });
     teleportLobby();
 };
-actions.portal = (p) => net.send('portal', { stage: p.stage });
+actions.chest = () => net.send('chest');
+actions.turtle = () => net.send('turtle');
+actions.freeBoost = () => { if (!S.freeBoost) net.send('freeBoost'); };
 actions.buy = (kind, key) => {
     if (kind === 'pass' && key === 'DoubleWins' && S.passes.DoubleWins) { toast('x2 Wins is active!', '#e27bff'); return; }
     buy(kind, key);
@@ -454,11 +456,6 @@ async function connect(name) {
         sfx('cheer'); rumble(0.7, 500);
         confettiAt(P.pos.clone().add(new V3(0, 4, 0)));
         fireworks(P.pos, 6, () => sfx('firework'));
-    });
-    room.onMessage('portalOk', (m) => {
-        const idx = m.stage - 1;
-        teleport(new V3(0, 0.5, STAGES[idx].zS + 8), 0);
-        actions.enterStage(idx);
     });
     room.onMessage('revived', () => actions.revive(true));
     room.onMessage('fx', () => {
@@ -831,7 +828,7 @@ function update(dt) {
     updatePrompt();
     animateCounters(dt);
     hudT -= dt;
-    if (hudT <= 0) { hudT = 0.1; updateHud(P, online); refreshShop(); }
+    if (hudT <= 0) { hudT = 0.1; updateHud(P, online); refreshShop(); updateLobbySigns(); }
 }
 
 // =====================================================================================
