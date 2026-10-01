@@ -197,7 +197,7 @@ actions.revive = () => {
 // =====================================================================================
 // Sharks swim across the lane; touching one is a KO. The top of a jump clears them.
 const sharks = [];
-const HAZARD_SHARK = { ...SHARK_LOOK, size: 1.45 };
+const HAZARD_SHARK = { ...SHARK_LOOK, size: 1.7 };
 function spawnShark(m) {
     const s = STAGES[m.s];
     if (!s || s.type !== 'Sharks') return;
@@ -218,7 +218,7 @@ function updateSharks(dt) {
         if (P.dead || P.shield > 0) continue;
         // Body from tail to nose along x, a little narrower and lower than the model
         const cx = x + k.dir * 1.5;
-        if (Math.abs(P.pos.x - cx) < 9 + HW && Math.abs(P.pos.z - k.z) < 2.2 + HW && P.pos.y < 4.6 && P.pos.y + PH > 0.8) { sfx('chomp'); die(); }
+        if (Math.abs(P.pos.x - cx) < 10.5 + HW && Math.abs(P.pos.z - k.z) < 2.6 + HW && P.pos.y < 5.2 && P.pos.y + PH > 0.8) { sfx('chomp'); die(); }
     }
 }
 
@@ -250,7 +250,11 @@ function updateChase(dt) {
     if (!chase.active) return;
     const s = chase.stage;
     if (chase.wait > 0) chase.wait -= dt;
-    else chase.z = Math.min(s.cE - 2, chase.z + s.chaseSpeed * dt);
+    else {
+        // Slightly slower than you walk: stop or slip and it catches you; sprint to pull away
+        const cruise = maxSpeedFor(S.level, S.rebirths);
+        chase.z = Math.min(s.cE - 2, chase.z + cruise * s.chase * dt);
+    }
     s.chaseMesh.position.set(0, 1, chase.z - s.chaseMesh.userData.nose);
     s.chaseKill.min.z = chase.z - 2; s.chaseKill.max.z = chase.z + 2;
     if (chase.z >= s.cE - 2) resetChase();

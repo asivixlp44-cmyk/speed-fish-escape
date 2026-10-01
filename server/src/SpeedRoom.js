@@ -152,11 +152,12 @@ export class SpeedRoom extends Room {
     // ----- simulation -----
     tick(dt) {
         const now = Date.now();
-        const occupied = STAGES.map(() => false);
+        // z of every live player, per stage
+        const occupied = STAGES.map(() => []);
         for (const [id, s] of this.sessions) {
             const pl = s.player;
             const st = stageAt(pl.z);
-            if (st >= 0 && pl.anim !== 3) occupied[st] = true;
+            if (st >= 0 && pl.anim !== 3) occupied[st].push(pl.z);
 
             // Speed from running, every 0.5s while the player is moving
             s.gainT += dt / 1000;
@@ -172,14 +173,16 @@ export class SpeedRoom extends Room {
             if (mult > 1) s.client.send('gain', { n: got, tread: 1 });
         }
 
-        // Crossing sharks: one shared timeline per occupied shark stage
+        // Crossing sharks: one shared timeline per occupied shark stage. Each shark crosses
+        // just ahead of a random player in that stage, so nobody gets a clear run.
         STAGES.forEach((stage, i) => {
-            if (!occupied[i] || stage.type !== 'Sharks') { this.nextShark[i] = 0; return; }
-            if (!this.nextShark[i]) this.nextShark[i] = now + 1500;
+            const zs = occupied[i];
+            if (!zs.length || stage.type !== 'Sharks') { this.nextShark[i] = 0; return; }
+            if (!this.nextShark[i]) this.nextShark[i] = now + 1200;
             if (now < this.nextShark[i]) return;
-            this.nextShark[i] = now + stage.bi * 1000;
-            // A shark swims across the lane somewhere along the stage
-            const z = stage.zS + 30 + Math.random() * (stage.cE - stage.zS - 40);
+            this.nextShark[i] = now + stage.bi * 1000 * (0.7 + Math.random() * 0.6);
+            const pz = zs[Math.floor(Math.random() * zs.length)];
+            const z = clamp(pz + stage.lead[0] + Math.random() * (stage.lead[1] - stage.lead[0]), stage.zS + 24, stage.cE - 4);
             this.broadcast('shark', { s: i, z, dir: Math.random() < 0.5 ? -1 : 1, t: now });
         });
     }

@@ -524,6 +524,12 @@ function cone(x, y, z, r, h, color) {
     scene.add(m);
     return m;
 }
+// Ice-crystal spike standing on a walkway (top at y + 3): jump it or go round, touching it is a KO
+function iceSpike(x, y, z) {
+    cone(x, y, z, 1, 3.2, 0x6fe8ff);
+    cone(x + 0.9, y, z + 0.5, 0.5, 1.8, 0xbff6ff);
+    const k = aabb(x, y + 1.3, z, 1.6, 2.6, 1.6); k.active = true; kills.push(k);
+}
 // Pink sneaker worth +Speed, with its "+1 Speed" label floating underneath
 function addPickup(stageIdx, x, y, z, amount) {
     const g = new T.Group();
@@ -629,8 +635,8 @@ function buildOcean(i, s, rng) {
     let z = s.zS + 16, x = 0, k = 0;
     const tops = [];
     while (z < z1 - 1) {
-        const len = Math.min(16 + rng() * 10, z1 - z);
-        const pw = 12 + rng() * 7;
+        const len = Math.min(13 + rng() * 9, z1 - z);
+        const pw = 9 + rng() * 5;
         x = clamp(x + (rng() * 2 - 1) * 4, -(W / 2 - pw / 2 - 3), W / 2 - pw / 2 - 3);
         const y = [0, 1.5, 3, 1.5][k % 4];
         waterFloor(pw, len, x, z + len / 2, y, y + 7);
@@ -640,7 +646,9 @@ function buildOcean(i, s, rng) {
             const cx = x + sd * (pw / 2 + 1.5 + rng() * 3);
             cone(cx, -6, z + rng() * len, 1.1, 7 + rng() * 3, rng() < 0.5 ? 0x6fe8ff : 0x6a6e80);
         }
-        z += len; k++;
+        if (k > 0 && k % 2 === 0 && len > 12) iceSpike(x + (rng() * 2 - 1) * (pw / 2 - 2), y, z + len / 2);
+        // Every other slab ends in a jump over the lava
+        z += len + (k % 2 && z + len < z1 - 20 ? 2.5 + rng() * 2 : 0); k++;
     }
     for (let pz = s.zS + 30; pz < z1; pz += 42) for (const sd of [-1, 1]) lavaPillar(sd * (W / 2 - 3 - rng() * 4), pz + rng() * 12, H);
     for (let pz = s.zS + 24; pz < z1; pz += 26) {
@@ -696,7 +704,7 @@ function buildMaze(i, s, rng) {
         else if (b > c) east[r][c] = false; else east[r][b] = false;
         seen[a][b] = true; stack.push([a, b]);
     }
-    for (let n = 0; n < ROWS * COLS * 0.12; n++) {
+    for (let n = 0; n < ROWS * COLS * 0.04; n++) {
         const r = Math.floor(rng() * (ROWS - 1)), c = Math.floor(rng() * (COLS - 1));
         if (rng() < 0.5) north[r][c] = false; else east[r][c] = false;
     }
@@ -711,6 +719,8 @@ function buildMaze(i, s, rng) {
         if (north[r][c] && !(r === ROWS - 1 && c === mid)) wall(C + 1.5, 1.5, x0 + c * C + C / 2, cz + C);
         if (east[r][c] && c < COLS - 1) wall(1.5, C + 1.5, x0 + (c + 1) * C, cz + C / 2);
     }
+    // Ice spike traps in some corridors
+    for (let r = 1; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (rng() < 0.16) iceSpike(x0 + c * C + C / 2 + (rng() - 0.5) * 4, 0, mz + r * C + C / 2 + (rng() - 0.5) * 4);
     for (let n = 0; n < 12; n++) {
         const r = Math.floor(rng() * ROWS), c = Math.floor(rng() * COLS);
         addPickup(i, x0 + c * C + C / 2, 0, mz + r * C + C / 2, s.pickup);
@@ -743,9 +753,9 @@ function buildObby(i, s, rng) {
     let z = s.zS + 16, x = 0, y = 0, k = 0;
     const tops = [];
     for (;;) {
-        const gap = 3.5 + rng() * 3;
-        const beam = rng() < 0.25;
-        const sx = beam ? 3.5 : 7 + rng() * 6, sz = beam ? 14 : 7 + rng() * 5;
+        const gap = 4 + rng() * 2;
+        const beam = rng() < 0.35;
+        const sx = beam ? 3 : 6 + rng() * 4, sz = beam ? 12 : 6 + rng() * 4;
         const nz = z + gap;
         if (nz + sz > z1 - 12) break;
         x = clamp(x + (rng() * 2 - 1) * 5, -(W / 2 - 8), W / 2 - 8);
