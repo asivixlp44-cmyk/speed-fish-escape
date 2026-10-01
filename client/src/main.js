@@ -12,13 +12,16 @@ import { createAvatar, loadBase, packAvatar, unpackAvatar, avatarStats } from '.
 import { updateMaterials } from './textures.js';
 import { pad, pollGamepad, rumble, onGamepadConnection } from './gamepad.js';
 import { render, setSpeedLines, updateFx, dust, sparkleColumn, ring, fireworks, setQuality, bubble } from './fx.js';
-import { buildWorld, SPAWN, pickups, beltTex, refreshShop, renderBoards, treadLocked, updateSlabs, onSlabLand, updateLobbySigns, slabs } from './world.js';
+import {
+    buildWorld, SPAWN, pickups, beltTex, refreshShop, renderBoards, treadLocked, updateSlabs, onSlabLand, updateLobbySigns, slabs,
+    sharkSwimmers, updateSharkSwimmers,
+} from './world.js';
 import {
     updateHud, toast, levelUp, showStageTitle, buy, showRevive, hideRevive, closeModal, openModal,
     refreshModal, promptEl, promptTxtEl, showGoal, animateCounters,
 } from './ui.js';
 import {
-    CFG, STAGES, fishById, auraById, KITS, SKINS, STARTER_FISH, SHARK_LOOK, maxSpeedFor, fmt, clamp,
+    CFG, STAGES, fishById, auraById, KITS, SKINS, STARTER_FISH, maxSpeedFor, fmt, clamp,
 } from '../../shared/config.js';
 
 // =====================================================================================
@@ -190,32 +193,17 @@ actions.revive = (atSpot) => {
 };
 
 // =====================================================================================
-// Stage runtime: sharks (server timeline), Megalodon chase (local)
+// Stage runtime: sharks (server clock), Megalodon chase (local)
 // =====================================================================================
-// Sharks swim across the lane; touching one is a KO. The top of a jump clears them.
-const sharks = [];
-const HAZARD_SHARK = { ...SHARK_LOOK, size: 1.7 };
-function spawnShark(m) {
-    const s = STAGES[m.s];
-    if (!s || s.type !== 'Sharks') return;
-    const f = buildFish(HAZARD_SHARK);
-    f.rotation.y = m.dir * Math.PI / 2;
-    scene.add(f);
-    sharks.push({ f, s, z: m.z, dir: m.dir, t0: m.t });
-}
+// Stage 4 sharks swim in fixed lanes on the server clock (world.js); touching one is a KO.
+// The top of a jump clears them.
 function updateSharks(dt) {
-    const now = net.now();
-    for (let i = sharks.length - 1; i >= 0; i--) {
-        const k = sharks[i], half = k.s.w / 2 + 14;
-        const age = (now - k.t0) / 1000;
-        const x = -k.dir * half + k.dir * k.s.bs * age;
-        k.f.position.set(x, 0.4, k.z);
-        swimFish(k.f, dt, true);
-        if (age > CFG.sharkLifetime || Math.abs(x) > half + 2) { scene.remove(k.f); sharks.splice(i, 1); continue; }
-        if (P.dead || P.shield > 0) continue;
+    updateSharkSwimmers(net.now() / 1000, dt);
+    if (P.dead || P.shield > 0 || P.stage < 0 || STAGES[P.stage].type !== 'Sharks') return;
+    for (const k of sharkSwimmers) {
         // Body from tail to nose along x, a little narrower and lower than the model
-        const cx = x + k.dir * 1.5;
-        if (Math.abs(P.pos.x - cx) < 10.5 + HW && Math.abs(P.pos.z - k.z) < 2.6 + HW && P.pos.y < 5.2 && P.pos.y + PH > 0.8) { sfx('chomp'); die(); }
+        const cx = k.x + k.dir * 1.5;
+        if (Math.abs(P.pos.x - cx) < 10.5 + HW && Math.abs(P.pos.z - k.z) < 2.6 + HW && P.pos.y < 5.2 && P.pos.y + PH > 0.8) { sfx('chomp'); die(); return; }
     }
 }
 
@@ -235,6 +223,18 @@ const chase = { active: false, stage: null, z: 0, wait: 0 };
 function resetChase() {
     if (chase.stage) { chase.stage.chaseMesh.visible = false; chase.stage.chaseKill.active = false; }
     chase.active = false; chase.stage = null;
+    setChaseWarning(-1);
+}
+// Red screen edges and a distance readout while the Megalodon is close behind
+let warnShown = -2;
+function setChaseWarning(gap) {
+    const el = $('#chaseWarn'), v = $('#chaseVignette');
+    const near = gap >= 0 && gap < 45;
+    if (!near) { if (warnShown !== -1) { el.hidden = true; v.style.opacity = 0; warnShown = -1; } return; }
+    const m = Math.max(0, Math.round(gap));
+    if (m !== warnShown) { el.hidden = false; el.textContent = '🦈 MEGALODON ' + m + 'm BEHIND!'; warnShown = m; }
+    el.classList.toggle('danger', gap < 15);
+    v.style.opacity = Math.min(1, (45 - gap) / 35).toFixed(2);
 }
 function startChase(idx) {
     resetChase();
@@ -248,10 +248,13 @@ function updateChase(dt) {
     const s = chase.stage;
     if (chase.wait > 0) chase.wait -= dt;
     else {
-        // Slightly slower than you walk: stop or slip and it catches you; sprint to pull away
-        const cruise = maxSpeedFor(S.level, S.rebirths);
-        chase.z = Math.min(s.cE - 2, chase.z + cruise * s.chase * dt);
+        // Rubber band: races in from far away, then creeps up a little faster than you walk.
+        // Sprint to stay ahead; stop or get stuck and it catches you.
+        const walk = walkSpeed() / (P.sprinting ? CFG.sprintMult : 1);
+        const gap = P.pos.z - chase.z, c = s.chase;
+        chase.z = Math.min(s.cE - 2, chase.z + walk * Math.max(c.base, 1 + (gap - c.near) * c.k) * dt);
     }
+    setChaseWarning(P.dead ? -1 : P.pos.z - chase.z);
     s.chaseMesh.position.set(0, 1, chase.z - s.chaseMesh.userData.nose);
     s.chaseKill.min.z = chase.z - 2; s.chaseKill.max.z = chase.z + 2;
     if (chase.z >= s.cE - 2) resetChase();
@@ -445,7 +448,6 @@ async function connect(name) {
         sparkleColumn(P.pos, 0xffd028);
         sfx('buy');
     });
-    room.onMessage('shark', spawnShark);
     room.onMessage('boards', renderBoards);
     room.onLeave((code, reason) => {
         console.warn('[net] left room', code, reason || '');
@@ -974,8 +976,8 @@ if (import.meta.env.DEV) {
         P, S, STAGES, avatarStats, scene,
         teleport: (x, y, z) => teleport(new V3(x, y, z), 0),
         enter: (i) => actions.enterStage(i),
-        hazards: () => ({ sharks: sharks.map((k) => [Math.round(k.f.position.x), Math.round(k.z)]), chase: chase.active ? chase.z : null }),
-        buildFish, fishById, spawnShark, net, buy,
+        hazards: () => ({ sharks: sharkSwimmers.map((k) => [Math.round(k.x), Math.round(k.z)]), chase: chase.active ? chase.z : null }),
+        buildFish, fishById, net, buy,
         slabs: () => slabs.map((s) => [Math.round(s.z), +s.c.min.y.toFixed(1)]), deaths: () => deaths,
         look: (yaw, pitch, dist) => { cam.yaw = yaw; cam.pitch = pitch; cam.dist = dist; },
         state: () => ({ x: P.pos.x, y: P.pos.y, z: P.pos.z, dead: P.dead, stage: P.stage, wins: S.wins, level: S.level, speed: S.speed, aura: S.aura, equipped: S.equipped, rebirths: S.rebirths }),

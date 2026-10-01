@@ -15,7 +15,6 @@ export const CFG = {
     voidY: -40,
     endZone: 36,
     pickupRespawn: 10,
-    sharkLifetime: 6,
     // Stage 2 stone walls: seconds up, shaking, dropping, down, rising
     fall: { raised: 2.2, warn: 0.45, fall: 0.35, down: 2.6, rise: 1.1 },
     boostMult: 2,
@@ -35,15 +34,16 @@ export const LOBBY = { halfX: 85, halfZ: 70, lower: 30, wallHeight: 46, spawn: {
 
 // Stages 1-4 follow reference/game satges.mp4; 5 and 6 are our own, in the same style.
 // w = stage width, door = opening in the "Stage N" wall at its start.
-// Sharks: bi = average seconds between sharks, bs = their swim speed, lead = how far ahead
-// of a player (studs) they cross. Chase: the Megalodon swims at chase x the player's walk speed.
+// Sharks: a shark lane every laneGap studs; sharks swim back and forth across at about bs.
+// Chase: the Megalodon swims at walk speed x max(base, 1 + (gap - near) x k), so it races in
+// when far behind and then creeps up: sprint to stay ahead, stop and it catches you.
 export const STAGES = [
     { name: 'Stage 1', sub: 'ESCAPE THE OCEAN', subColor: '#28e0ff', type: 'Ocean', len: 230, w: 40, door: 40, pickup: 1, wins: 1 },
     { name: 'Stage 2', sub: '', type: 'FallingWalls', len: 300, w: 30, door: 30, pickup: 1, wins: 3 },
     { name: 'Stage 3', sub: '', type: 'Maze', len: 300, w: 64, door: 16, pickup: 1, wins: 8 },
-    { name: 'Stage 4', sub: '', type: 'Sharks', len: 320, w: 44, door: 26, pickup: 1, wins: 20, bi: 0.8, bs: 34, lead: [10, 38] },
+    { name: 'Stage 4', sub: '', type: 'Sharks', len: 320, w: 44, door: 26, pickup: 1, wins: 20, laneGap: 20, bs: 30 },
     { name: 'Stage 5', sub: 'Coral Obby', subColor: '#ff6ec7', type: 'Obby', len: 360, w: 44, door: 24, pickup: 1, wins: 50 },
-    { name: 'Stage 6', sub: 'MEGALODON!', subColor: '#ff3c50', type: 'Chase', len: 420, w: 44, door: 30, chase: 0.9, chaseWait: 3, pickup: 1, wins: 100 },
+    { name: 'Stage 6', sub: 'MEGALODON!', subColor: '#ff3c50', type: 'Chase', len: 420, w: 44, door: 30, chase: { base: 1.03, k: 0.035, near: 18 }, chaseWait: 1.5, pickup: 1, wins: 100 },
 ];
 {
     let z = 70;

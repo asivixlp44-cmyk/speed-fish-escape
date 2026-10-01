@@ -240,6 +240,10 @@ body.touch #tips { bottom: calc(env(safe-area-inset-bottom, 0px) + 16rem); }
 #stageTitle.show .s { animation: slideIn 0.55s 0.12s cubic-bezier(0.2, 1.4, 0.4, 1) both; }
 @keyframes slideIn { from { opacity: 0; transform: translateX(-3rem) skewX(-12deg); } }
 
+#chaseVignette { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.2s linear; background: radial-gradient(ellipse at center, rgba(255, 0, 30, 0) 45%, rgba(255, 0, 30, 0.55) 100%); }
+#chaseWarn { position: absolute; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 5.4rem); transform: translateX(-50%); font-size: 1.6rem; font-weight: 700; color: #ff5a5a; white-space: nowrap; pointer-events: none; }
+#chaseWarn.danger { animation: warnPulse 0.45s ease-in-out infinite alternate; color: #ff2a3a; }
+@keyframes warnPulse { to { transform: translateX(-50%) scale(1.15); } }
 #flash { position: absolute; inset: 0; pointer-events: none; opacity: 0; background: radial-gradient(circle at 50% 55%, rgba(125, 255, 107, 0.45), rgba(125, 255, 107, 0) 60%); }
 #flash.show { animation: flash 0.7s ease-out; }
 #flash.gate { background: radial-gradient(circle at 50% 50%, rgba(111, 224, 255, 0.55), rgba(111, 224, 255, 0) 65%); }
@@ -310,6 +314,8 @@ body.touch #tips { bottom: calc(env(safe-area-inset-bottom, 0px) + 16rem); }
         <div id="fps" class="o1 passive" hidden>60 FPS</div>
         <div id="tips" class="o1" hidden></div>
         <div id="flash" class="passive" aria-hidden="true"></div>
+        <div id="chaseVignette" class="passive" aria-hidden="true"></div>
+        <div id="chaseWarn" class="o passive" role="status" hidden></div>
         <div id="goalBanner" class="passive" hidden><div class="rays"></div><div class="goal o">ESCAPED!</div><div class="sub o" id="goalSub">+1 Wins</div></div>
 
         <div id="leftCol">

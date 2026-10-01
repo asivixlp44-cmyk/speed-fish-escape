@@ -726,9 +726,40 @@ function buildMaze(i, s, rng) {
         addPickup(i, x0 + c * C + C / 2, 0, mz + r * C + C / 2, s.pickup);
     }
 }
-// Stage 4: brown brick hall with yellow panels, a pale floor, sea grass and crystals.
-// Sharks swim across it on the server's timeline (main.js).
+// Stage 4 sharks: a lane every laneGap studs. Each shark swims back and forth across the
+// hall on the server clock, so it is always there and every player sees the same thing.
+export const sharkSwimmers = [];
+const HAZARD_SHARK = { ...SHARK_LOOK, size: 1.7 };
+function sharkLanes(s, rng) {
+    const span = s.w / 2 + 6;
+    let lane = 0;
+    for (let z = s.zS + 30; z < s.cE - 8; z += s.laneGap, lane++) {
+        const speed = s.bs * (0.8 + rng() * 0.45);
+        const phase = rng();
+        // Every third lane has a second shark coming the other way
+        const count = lane % 3 === 2 ? 2 : 1;
+        for (let n = 0; n < count; n++) {
+            const f = buildFish(HAZARD_SHARK);
+            scene.add(f);
+            sharkSwimmers.push({ f, z: z + (n ? 4 : 0), span, period: 4 * span / speed, phase: (phase + n * 0.5) % 1, x: 0, dir: 1 });
+        }
+    }
+}
+// Positions every shark for server time t (seconds); main.js checks for hits
+export function updateSharkSwimmers(t, dt) {
+    for (const k of sharkSwimmers) {
+        const u = ((t / k.period + k.phase) % 1 + 1) % 1;
+        const out = u < 0.5;
+        k.x = -k.span + 2 * k.span * (out ? u * 2 : 2 - u * 2);
+        k.dir = out ? 1 : -1;
+        k.f.position.set(k.x, 0.4, k.z);
+        k.f.rotation.y = k.dir * Math.PI / 2;
+        if (Math.abs(k.z - camera.position.z) < 160) swimFish(k.f, dt, true);
+    }
+}
+// Stage 4: brown brick hall with yellow panels, a pale floor, sea grass and crystals
 function buildSharks(i, s, rng) {
+    sharkLanes(s, rng);
     const W = s.w, H = 30;
     enclosure(s, brickMaterial(0x8a5a4a, s.len / 12, (H + 10) / 6), 0x3a2a22, H);
     ceilingLights(s, H);
