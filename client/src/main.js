@@ -163,9 +163,8 @@ function teleport(pos, yaw) {
 }
 function teleportLobby() { P.stage = -1; teleport(SPAWN, 0); }
 
-// Dying bursts the rider and sends them back to the lobby; for a while a
-// "Revive to Stage N" button can put them back at the start of that stage.
-let reviveStage = -1;
+// Dying bursts the rider and shows the Revive popup: revive where you fell (Bux)
+// with a few seconds of shield, or go back to the lobby.
 let deaths = 0;
 function die() {
     if (P.dead || P.shield > 0) return;
@@ -174,22 +173,20 @@ function die() {
     sfx('death'); addShake(0.9); rumble(1, 400);
     resetChase();
     sendMove(true);
-    const stage = P.stage;
-    setTimeout(() => {
-        P.dead = false;
-        teleportLobby();
-        reviveStage = stage;
-        if (stage >= 0) showRevive(stage);
-    }, 1200);
+    showRevive();
 }
-actions.revive = () => {
+actions.revive = (atSpot) => {
     hideRevive();
-    const idx = reviveStage;
-    reviveStage = -1;
-    if (idx < 0 || !STAGES[idx]) return;
-    teleport(new V3(0, 0.5, STAGES[idx].zS + 8), 0);
-    P.shield = CFG.shieldTime;
-    actions.enterStage(idx);
+    if (!P.dead) return;
+    P.dead = false;
+    if (atSpot) {
+        const stage = P.stage;
+        teleport(P.lastSafe.clone(), P.facing);
+        P.stage = stage;
+        P.shield = CFG.shieldTime;
+        const s = STAGES[stage];
+        if (s && s.type === 'Chase') startChase(stage);
+    } else teleportLobby();
 };
 
 // =====================================================================================
@@ -442,7 +439,7 @@ async function connect(name) {
         confettiAt(P.pos.clone().add(new V3(0, 4, 0)));
         fireworks(P.pos, 6, () => sfx('firework'));
     });
-    room.onMessage('revived', () => actions.revive());
+    room.onMessage('revived', () => actions.revive(true));
     room.onMessage('fx', () => {
         confettiAt(P.pos.clone().add(new V3(0, 4, 0)));
         sparkleColumn(P.pos, 0xffd028);
@@ -620,10 +617,11 @@ function focusStep(container, dir) {
 function padButtons() {
     const p = pad.pressed;
     if (!p.size) return;
-    const overlay = ['#start', '#offline', '#buy', '#modal'].find(shown);
+    const overlay = ['#start', '#offline', '#buy', '#revive', '#modal'].find(shown);
     if (overlay) pad.jump = false;
     if (overlay === '#start') { if ((p.has('A') || p.has('START')) && shown('#playBtn')) play(); return; }
     if (overlay === '#offline') { if (p.has('A')) $('#reconnectBtn').click(); return; }
+    if (overlay === '#revive') { if (p.has('A')) $('#reviveYes').click(); else if (p.has('B')) $('#reviveNo').click(); return; }
     if (overlay === '#buy') { if (p.has('A')) $('#buyOk').click(); else if (p.has('B')) $('#buyCancel').click(); return; }
     if (overlay === '#modal') {
         const body = $('#modal');
@@ -641,7 +639,7 @@ function padButtons() {
         return;
     }
     if (!running) return;
-    if (p.has('X')) { if (shown('#revive') && !activePrompt) $('#revive').click(); else usePrompt(); }
+    if (p.has('X')) usePrompt();
     if (p.has('Y')) openModal('store');
     if (p.has('LB')) openModal('rebirth');
     if (p.has('RB')) openModal('auras');
@@ -916,7 +914,7 @@ function wirePortalSettings() {
 }
 function wirePortalEvents() {
     BX.onPortalEvent((event, data) => {
-        if (event === 'respawn_request') { if (running && !P.dead) teleportLobby(); }
+        if (event === 'respawn_request') { if (P.dead) actions.revive(false); else if (running) teleportLobby(); }
         else if (event === 'chat_message_sent' && data) net.send('chat', { text: String(data) });
         else if (event === 'play_emote' && data) { playEmoteOn(localAvatar, String(data)); net.send('emote', { id: String(data) }); }
     });

@@ -40,8 +40,9 @@ For development, run `npm run dev:server` and `npm run dev:client` in two termin
   5. Coral Obby: coral platforms over lava.
   6. MEGALODON!: a giant Megalodon chases you down the hall at 90% of your walk speed; stop and it catches you, sprint to pull away.
 - Pink sneakers on the course give +1 Speed. Each stage ends on a landing with a "+N Wins / Return!" pad (+1 / +3 / +8 / +20 / +50 / +100) and a "x2 Wins!" pad.
-- Dying sends you back to the lobby, where a "Revive to Stage N" button (Bux) can put you back at the start of that stage.
+- Dying shows a **Revive** popup: revive where you fell (Bux) with a few seconds of shield, or No! / wait 10 s to go back to the lobby.
 - XP is earned 1:1 with Speed. Max swim speed is `12 + 2 × Level + 20 × Rebirths`, and the level cap is 25.
+- Soundtrack: an original, code-generated 80 BPM chill lo-fi ocean track (electric piano, kalimba, soft swung drums, waves, bubbles and a distant whale). No audio files.
 - **Daily** login streak: one claim per UTC day for seven escalating rewards; missing a day resets the streak.
 - Rebirth, Auras, FREE playtime rewards, Store, Friends and Avatar work as in Speed Football Scape.
 

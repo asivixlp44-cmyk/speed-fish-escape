@@ -1,6 +1,7 @@
 // Procedural soundtrack and sound effects (Web Audio, no asset files).
-// The track is an original 118 BPM tropical ocean tune: I–V–vi–IV in F with marimba
-// arps and a steel-drum lead, 16 bars that loop through groove, hook, breakdown and drop.
+// The track is an original 80 BPM chill lo-fi ocean tune: lazy swung drums, warm
+// electric piano 7th chords, an airy pad, a kalimba melody with echo, wave washes,
+// bubble blips and the odd distant whale. 16 bars, looping.
 
 let ctx = null, master, musicBus, sfxBus, reverb, delay, oceanGain;
 let noiseBuf = null;
@@ -8,23 +9,27 @@ let musicOn = false, schedTimer = null, step = 0, nextTime = 0;
 const settings = { music: 0.6, sfx: 0.8, master: 1 };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('sfe_audio') || '{}')); } catch (e) { /* defaults */ }
 
-const BPM = 118, STEP = 60 / BPM / 4;
+const BPM = 80, STEP = 60 / BPM / 4;
 const midi = (n) => 440 * Math.pow(2, (n - 69) / 12);
-// The song data below is written in C; KEY moves it up to F
-const KEY = 5;
-// Chord roots and triads (MIDI), one chord per bar: C, G, Am, F
+// One chord per bar: Fmaj7, Em7, Dm7, Cmaj7 (root, then voicing in MIDI)
 const CHORDS = [
-    { root: 36, notes: [60, 64, 67] },
-    { root: 43, notes: [59, 62, 67] },
-    { root: 45, notes: [57, 60, 64] },
-    { root: 41, notes: [57, 60, 65] },
+    { root: 41, notes: [57, 60, 64, 65] },
+    { root: 40, notes: [55, 59, 62, 64] },
+    { root: 38, notes: [57, 60, 62, 65] },
+    { root: 36, notes: [55, 59, 60, 64] },
 ];
-// Steel-drum hook, 4 bars x 16 steps: [step, midi, length in steps]
-const HOOK = [
-    [[0, 76, 3], [4, 79, 3], [8, 76, 2], [10, 74, 2], [12, 72, 4]],
-    [[0, 74, 3], [4, 71, 3], [8, 74, 2], [10, 79, 6]],
-    [[0, 76, 3], [4, 72, 3], [8, 76, 2], [10, 77, 2], [12, 79, 4]],
-    [[0, 77, 3], [4, 76, 2], [6, 74, 2], [8, 72, 8]],
+// Kalimba phrases, 4 bars x 16 steps: [step, midi, length in steps]
+const MELODY_A = [
+    [[0, 72, 3], [3, 76, 3], [6, 79, 4], [10, 77, 2], [12, 76, 4]],
+    [[0, 74, 4], [4, 71, 4], [8, 74, 2], [10, 76, 6]],
+    [[0, 77, 3], [3, 76, 3], [6, 74, 2], [8, 72, 4], [12, 69, 4]],
+    [[0, 71, 4], [4, 72, 4], [8, 76, 6], [14, 74, 2]],
+];
+const MELODY_B = [
+    [[0, 84, 2], [2, 81, 2], [4, 79, 4], [10, 81, 2], [12, 84, 4]],
+    [[0, 83, 4], [6, 79, 2], [8, 76, 8]],
+    [[0, 81, 2], [2, 79, 2], [4, 77, 4], [8, 76, 2], [10, 74, 6]],
+    [[0, 76, 4], [4, 79, 4], [8, 72, 8]],
 ];
 
 export function initAudio() {
@@ -44,19 +49,19 @@ export function initAudio() {
     const d = noiseBuf.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
 
-    // Shared reverb (generated impulse) and a dotted-eighth echo for the arp
+    // Long, wet reverb (generated impulse) and a dotted-eighth echo for the kalimba
     reverb = ctx.createConvolver();
-    const len = ctx.sampleRate * 2.2, ir = ctx.createBuffer(2, len, ctx.sampleRate);
+    const len = ctx.sampleRate * 3.4, ir = ctx.createBuffer(2, len, ctx.sampleRate);
     for (let c = 0; c < 2; c++) {
         const ch = ir.getChannelData(c);
-        for (let i = 0; i < len; i++) ch[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3);
+        for (let i = 0; i < len; i++) ch[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.4);
     }
     reverb.buffer = ir;
-    const revGain = ctx.createGain(); revGain.gain.value = 0.28;
+    const revGain = ctx.createGain(); revGain.gain.value = 0.42;
     reverb.connect(revGain).connect(musicBus);
     delay = ctx.createDelay(1);
     delay.delayTime.value = STEP * 3;
-    const fb = ctx.createGain(); fb.gain.value = 0.32;
+    const fb = ctx.createGain(); fb.gain.value = 0.38;
     const dlGain = ctx.createGain(); dlGain.gain.value = 0.35;
     delay.connect(fb).connect(delay);
     delay.connect(dlGain).connect(musicBus);
@@ -99,93 +104,120 @@ function noise(t, dur, type, freq, q, gain, out) {
     src.start(t, Math.random() * 1.5); src.stop(t + dur + 0.05);
     return g;
 }
-function kick(t) {
+function kick(t, gain) {
     const o = ctx.createOscillator(), g = ctx.createGain();
-    o.frequency.setValueAtTime(155, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.13);
-    g.gain.setValueAtTime(1, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.32);
-    o.connect(g).connect(musicBus); o.start(t); o.stop(t + 0.35);
+    o.frequency.setValueAtTime(110, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.12);
+    g.gain.setValueAtTime(gain || 0.55, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+    o.connect(g).connect(musicBus); o.start(t); o.stop(t + 0.4);
 }
-function clap(t, gain) {
-    for (let i = 0; i < 3; i++) noise(t + i * 0.011, i === 2 ? 0.16 : 0.03, 'bandpass', 1400, 1.2, (gain || 0.5), musicBus);
-    const g = noise(t + 0.02, 0.2, 'bandpass', 1600, 0.8, 0.12, reverb);
-    return g;
+// Soft rim click with a splash of reverb
+function rim(t) {
+    noise(t, 0.05, 'bandpass', 1800, 2, 0.12, musicBus);
+    noise(t, 0.12, 'bandpass', 2200, 1, 0.06, reverb);
 }
-function hat(t, open) { noise(t, open ? 0.14 : 0.035, 'highpass', 7500, 0.7, open ? 0.16 : 0.12); }
+function shaker(t, gain) { noise(t, 0.05, 'highpass', 6000, 0.7, gain, musicBus); }
+// Warm sine sub bass
 function bass(t, n, dur) {
-    const o = ctx.createOscillator(), f = ctx.createBiquadFilter(), g = ctx.createGain();
-    o.type = 'sawtooth'; o.frequency.value = midi(n);
-    f.type = 'lowpass'; f.frequency.setValueAtTime(900, t); f.frequency.exponentialRampToValueAtTime(220, t + dur); f.Q.value = 6;
-    env(g, t, 0.005, 0.32, dur * 0.8, 0.12, 0.04, t + dur);
-    o.connect(f).connect(g).connect(musicBus); o.start(t); o.stop(t + dur + 0.1);
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sine'; o.frequency.value = midi(n);
+    env(g, t, 0.02, 0.32, dur * 0.6, 0.18, 0.15, t + dur);
+    o.connect(g).connect(musicBus); o.start(t); o.stop(t + dur + 0.25);
 }
-function pad(t, notes, dur, open) {
-    const f = ctx.createBiquadFilter(), g = ctx.createGain();
-    f.type = 'lowpass'; f.frequency.setValueAtTime(open ? 2600 : 900, t); f.Q.value = 0.8;
-    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.06, t + 0.25);
-    g.gain.setValueAtTime(0.06, t + dur - 0.2); g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.3);
-    // Sidechain-style pump on every beat
-    for (let b = 1; b < 4; b++) { const bt = t + b * STEP * 4; g.gain.setValueAtTime(0.02, bt); g.gain.linearRampToValueAtTime(0.06, bt + STEP * 2.5); }
-    f.connect(g); g.connect(musicBus); g.connect(reverb);
-    for (const n of notes) for (const det of [-9, 9]) {
-        const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = midi(n); o.detune.value = det;
-        o.connect(f); o.start(t); o.stop(t + dur + 0.4);
-    }
-}
-// Marimba: sine body plus a quickly fading 4th harmonic for the mallet knock
-function pluck(t, n, cutoff) {
-    const f = ctx.createBiquadFilter(), g = ctx.createGain();
-    f.type = 'lowpass'; f.frequency.setValueAtTime(cutoff, t);
-    g.gain.setValueAtTime(0.11, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
-    f.connect(g); g.connect(musicBus); g.connect(delay);
-    for (const [mult, amp, dur] of [[1, 1, 0.35], [4, 0.35, 0.05]]) {
-        const o = ctx.createOscillator(), og = ctx.createGain();
-        o.type = 'sine'; o.frequency.value = midi(n) * mult;
-        og.gain.setValueAtTime(amp, t); og.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-        o.connect(og).connect(f); o.start(t); o.stop(t + dur + 0.05);
-    }
-}
-// Steel drum: bright inharmonic partials with a short pitch dip on the attack
-function lead(t, n, dur) {
-    const g = ctx.createGain();
-    env(g, t, 0.005, 0.14, 0.15, 0.05, 0.25, t + dur);
+// Electric piano: sine body plus a bell-like 2nd partial, with a slow tremolo
+function epiano(t, notes, dur, gain) {
+    const g = ctx.createGain(), trem = ctx.createOscillator(), tg = ctx.createGain();
+    env(g, t, 0.015, gain || 0.07, 0.6, (gain || 0.07) * 0.45, 0.6, t + dur);
+    trem.frequency.value = 4.2; tg.gain.value = (gain || 0.07) * 0.25; trem.connect(tg).connect(g.gain);
     g.connect(musicBus); g.connect(reverb);
-    for (const [mult, amp] of [[1, 1], [2, 0.5], [2.98, 0.22], [4.2, 0.1]]) {
-        const o = ctx.createOscillator(), og = ctx.createGain();
-        o.type = 'sine';
-        o.frequency.setValueAtTime(midi(n) * mult * 1.02, t); o.frequency.exponentialRampToValueAtTime(midi(n) * mult, t + 0.04);
-        og.gain.value = amp;
-        o.connect(og).connect(g); o.start(t); o.stop(t + dur + 0.3);
+    for (const n of notes) {
+        const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = midi(n);
+        o.detune.value = (Math.random() - 0.5) * 8;
+        const h = ctx.createOscillator(), hg = ctx.createGain(); h.type = 'sine'; h.frequency.value = midi(n) * 2;
+        hg.gain.setValueAtTime(0.25, t); hg.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
+        o.connect(g); h.connect(hg).connect(g);
+        o.start(t); o.stop(t + dur + 0.7); h.start(t); h.stop(t + 0.5);
+    }
+    trem.start(t); trem.stop(t + dur + 0.7);
+}
+// Slow airy pad: detuned triangles through a soft lowpass that breathes in and out
+function pad(t, notes, dur) {
+    const f = ctx.createBiquadFilter(), g = ctx.createGain();
+    f.type = 'lowpass'; f.Q.value = 0.5;
+    f.frequency.setValueAtTime(500, t); f.frequency.linearRampToValueAtTime(1300, t + dur / 2); f.frequency.linearRampToValueAtTime(500, t + dur);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.035, t + dur * 0.35);
+    g.gain.setValueAtTime(0.035, t + dur * 0.7); g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.8);
+    f.connect(g); g.connect(musicBus); g.connect(reverb);
+    for (const n of notes) for (const det of [-7, 7]) {
+        const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = midi(n + 12); o.detune.value = det;
+        o.connect(f); o.start(t); o.stop(t + dur + 1);
     }
 }
-function riser(t, dur) {
+// Kalimba / glass bell: sine with a short inharmonic ping, sent into the echo
+function bell(t, n, dur) {
+    const g = ctx.createGain();
+    env(g, t, 0.004, 0.11, 0.35, 0.03, 0.6, t + dur);
+    g.connect(musicBus); g.connect(delay); g.connect(reverb);
+    const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = midi(n); o.connect(g);
+    const p = ctx.createOscillator(), pg = ctx.createGain(); p.type = 'sine'; p.frequency.value = midi(n) * 5.4;
+    pg.gain.setValueAtTime(0.35, t); pg.gain.exponentialRampToValueAtTime(0.0001, t + 0.08);
+    p.connect(pg).connect(g);
+    o.start(t); o.stop(t + dur + 0.8); p.start(t); p.stop(t + 0.1);
+}
+// Distant whale call: slow sine glide drowned in reverb
+function whale(t) {
+    const o = ctx.createOscillator(), g = ctx.createGain(), f = ctx.createBiquadFilter();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(220, t); o.frequency.exponentialRampToValueAtTime(340, t + 1.2); o.frequency.exponentialRampToValueAtTime(190, t + 2.8);
+    const vib = ctx.createOscillator(), vg = ctx.createGain(); vib.frequency.value = 5; vg.gain.value = 6; vib.connect(vg).connect(o.frequency);
+    f.type = 'lowpass'; f.frequency.value = 900;
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.05, t + 0.6); g.gain.exponentialRampToValueAtTime(0.0001, t + 3);
+    o.connect(f).connect(g); g.connect(reverb); g.connect(musicBus);
+    o.start(t); o.stop(t + 3.1); vib.start(t); vib.stop(t + 3.1);
+}
+// Little bubble blip rising in pitch
+function blip(t) {
+    const f0 = 500 + Math.random() * 400;
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sine'; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f0 * 2.4, t + 0.07);
+    g.gain.setValueAtTime(0.04, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+    o.connect(g); g.connect(musicBus); g.connect(reverb); o.start(t); o.stop(t + 0.1);
+}
+// Wave wash that swells over two bars
+function wave(t, dur) {
     const src = ctx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
-    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 3;
-    f.frequency.setValueAtTime(400, t); f.frequency.exponentialRampToValueAtTime(8000, t + dur);
-    const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.18, t + dur);
+    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.setValueAtTime(400, t); f.frequency.linearRampToValueAtTime(1500, t + dur * 0.45); f.frequency.linearRampToValueAtTime(300, t + dur);
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.07, t + dur * 0.45); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     src.connect(f).connect(g).connect(musicBus); src.start(t); src.stop(t + dur);
 }
 
-// One 16th-note step of the song
+// One 16th-note step of the song. 16 bars: 2 bars of intro (pads and waves), then the
+// groove; the bell melody plays in bars 4-7 and 10-15, bars 8-9 drop the drums.
 function playStep(s, t) {
-    const bar = Math.floor(s / 16) % 16, i = s % 16, c = CHORDS[bar % 4];
-    const chord = { root: c.root + KEY, notes: c.notes.map((n) => n + KEY) };
-    const breakdown = bar >= 8 && bar < 12;
-    const hookOn = (bar >= 4 && bar < 8) || bar >= 12;
-    if (!breakdown && i % 4 === 0) kick(t);
-    if (breakdown && bar === 11 && i >= 8) { if (i % 2 === 0) clap(t, 0.25 + (i - 8) * 0.04); }
-    else if (i === 4 || i === 12) clap(t);
-    if (!breakdown) hat(t, i % 4 === 2);
-    else if (i % 4 === 2) hat(t, false);
-    if (!breakdown && i % 2 === 0) {
-        const pattern = [0, 0, 12, 0, 0, 12, 0, 7];
-        bass(t, chord.root + pattern[(i / 2) % 8], STEP * 1.8);
+    const bar = Math.floor(s / 16) % 16, i = s % 16, chord = CHORDS[bar % 4];
+    // Lazy swing: every off 16th lands a little late
+    const st = t + (i % 2 ? STEP * 0.22 : 0);
+    const intro = bar < 2, drop = bar === 8 || bar === 9;
+    if (i === 0) {
+        pad(t, chord.notes, STEP * 16);
+        if (bar % 2 === 0) wave(t, STEP * 32);
+        if (bar === 6 || bar === 14) whale(t + STEP * 4);
     }
-    if (i === 0) pad(t, chord.notes, STEP * 16, bar >= 12);
-    const tones = chord.notes.concat(chord.notes.map((n) => n + 12));
-    const cutoff = breakdown ? 600 + (bar - 8) * 900 + i * 60 : 2400;
-    pluck(t, tones[(i * 5) % tones.length] + 12, cutoff);
-    if (hookOn) for (const [st, n, l] of HOOK[bar % 4]) if (st === i) lead(t, n + KEY, STEP * l);
-    if (bar === 11 && i === 0) riser(t, STEP * 16);
+    if (!intro) {
+        if (i === 0) epiano(t, chord.notes, STEP * 9);
+        if (i === 10) epiano(st, chord.notes.slice(1), STEP * 5, 0.05);
+        if (i === 0 || i === 10) bass(st, chord.root, STEP * (i ? 5 : 9));
+    } else if (i === 0) epiano(t, chord.notes, STEP * 15, 0.05);
+    if (!intro && !drop) {
+        if (i === 0 || i === 10 || (i === 7 && bar % 2)) kick(st, i === 7 ? 0.3 : 0.55);
+        if (i === 4 || i === 12) rim(st);
+        if (i % 2 === 0) shaker(st, i % 4 === 2 ? 0.045 : 0.025);
+    }
+    const melody = (bar >= 4 && bar < 8) || bar >= 10;
+    if (melody) {
+        const phrase = bar >= 12 ? MELODY_B : MELODY_A;
+        for (const [at, n, l] of phrase[bar % 4]) if (at === i) bell(st, n, STEP * l);
+    }
+    if (Math.random() < 0.03) blip(t + Math.random() * STEP);
 }
 
 function scheduler() {

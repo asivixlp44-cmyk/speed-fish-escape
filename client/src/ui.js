@@ -137,6 +137,7 @@ export function buy(kind, key) {
 async function buyBux(kind, key) {
     const r = await BX.buyWithBux(kind, key);
     if (r.success) { toast('Purchase complete!', '#7dff6b'); return; }
+    if (key === 'Revive') actions.revive(false);
     if (r.error && !/cancel/i.test(r.error)) toast(r.error, '#ff5a5a');
 }
 $('#buyOk').addEventListener('click', () => {
@@ -146,27 +147,32 @@ $('#buyOk').addEventListener('click', () => {
 });
 $('#buyCancel').addEventListener('click', () => {
     $('#buy').hidden = true;
+    if (pendingBuy && pendingBuy.key === 'Revive') actions.revive(false);
     pendingBuy = null;
 });
 $('#btn2x').addEventListener('click', () => buy('pass', 'DoubleSpeed'));
 document.querySelectorAll('[data-product]').forEach((b) => b.addEventListener('click', () => buy('product', b.dataset.product)));
 
-// ----- revive button -----
-// After dying you are back in the lobby; for a few seconds a button offers to go back to that stage
+// ----- revive popup -----
 let reviveTimer;
-export function showRevive(stageIdx) {
-    const b = $('#revive');
-    setHtml(b, 'Revive to Stage ' + (stageIdx + 1) + ' <span class="price">' + bux(PRODUCTS.Revive.price) + '</span>');
-    b.hidden = false;
-    b.classList.remove('pop'); void b.offsetWidth; b.classList.add('pop');
-    clearTimeout(reviveTimer);
-    reviveTimer = setTimeout(hideRevive, CFG.reviveTimeout * 1000);
+export function showRevive() {
+    setHtml($('#reviveYes'), bux(PRODUCTS.Revive.price) + ' Bux');
+    $('#revive').hidden = false;
+    let left = CFG.reviveTimeout;
+    $('#reviveTimer').textContent = 'Returning to lobby in ' + left + 's';
+    clearInterval(reviveTimer);
+    reviveTimer = setInterval(() => {
+        left--;
+        $('#reviveTimer').textContent = 'Returning to lobby in ' + Math.max(0, left) + 's';
+        if (left <= 0) { $('#buy').hidden = true; pendingBuy = null; actions.revive(false); }
+    }, 1000);
 }
 export function hideRevive() {
-    clearTimeout(reviveTimer);
+    clearInterval(reviveTimer);
     $('#revive').hidden = true;
 }
-$('#revive').addEventListener('click', () => { hideRevive(); buy('product', 'Revive'); });
+$('#reviveYes').addEventListener('click', () => { hideRevive(); buy('product', 'Revive'); });
+$('#reviveNo').addEventListener('click', () => actions.revive(false));
 
 // ----- panels -----
 let modalKind = null;

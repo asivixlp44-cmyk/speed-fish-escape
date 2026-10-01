@@ -169,9 +169,8 @@ body.touch #sprintHint { display: none; }
 .rebirth-box button { font-size: 1.5rem; padding: 0.6rem; }
 
 #buy .panel { width: min(24rem, 100%); }
-#revive { position: absolute; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 5.4rem); transform: translateX(-50%); display: flex; align-items: center; gap: 0.5rem; font-size: 1.25rem; padding: 0.35rem 0.6rem 0.35rem 1rem; white-space: nowrap; }
-#revive .price { font-size: 0.95rem; background: rgba(22, 18, 31, 0.3); border-radius: 0.5rem; padding: 0.1rem 0.4rem; }
-#revive.pop { animation: popIn 0.34s cubic-bezier(0.2, 1.5, 0.4, 1); }
+#revive .panel { width: min(24rem, 100%); }
+#reviveTimer { font-size: 1rem; color: #ffd0d0; }
 .buy-body { display: grid; gap: 0.8rem; justify-items: center; text-align: center; padding: 1.2rem 1rem 1rem; }
 .buy-body .item { font-size: 1.6rem; font-weight: 700; }
 .buy-body .cost { font-size: 1.3rem; font-weight: 700; color: #7dff6b; }
@@ -336,7 +335,6 @@ body.touch #tips { bottom: calc(env(safe-area-inset-bottom, 0px) + 16rem); }
         </div>
 
         <div id="boost" class="o passive" hidden></div>
-        <button class="btn g-green o1" id="revive" hidden>Revive to Stage 1</button>
 
         <div id="bottom" class="passive">
             <div id="sprintHint" class="o">HOLD SHIFT TO SPRINT!</div>
@@ -375,6 +373,17 @@ body.touch #tips { bottom: calc(env(safe-area-inset-bottom, 0px) + 16rem); }
         </div>
     </div>
 
+
+    <div id="revive" class="overlay" hidden>
+        <div class="panel" role="dialog" aria-labelledby="reviveTitle">
+            <header style="background:linear-gradient(#ff5a5a,#b3122a)"><h2 class="o" id="reviveTitle">💀 REVIVE</h2></header>
+            <div class="buy-body">
+                <div class="item o1">Revive where you fell?</div>
+                <div id="reviveTimer">Returning to lobby in 10s</div>
+                <div class="acts"><button class="btn g-green o1" id="reviveYes"><i class="bx" aria-hidden="true"></i>9 Bux</button><button class="btn g-red o1" id="reviveNo">No!</button></div>
+            </div>
+        </div>
+    </div>
 
     <div id="offline" class="overlay" hidden>
         <div class="panel" role="alertdialog" aria-labelledby="offlineTitle">
