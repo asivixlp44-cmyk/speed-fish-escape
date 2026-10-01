@@ -52,7 +52,6 @@ export function updateHud(P, online) {
     if (document.activeElement !== el.input) el.input.value = S.customSpeed > 0 && S.customSpeed <= max ? S.customSpeed : max;
     setHtml(el.price2x, S.passes.DoubleSpeed ? 'OWNED' : bux(PASSES.DoubleSpeed.price));
     document.querySelectorAll('[data-price]').forEach((n) => setHtml(n, bux(PRODUCTS[n.dataset.price].price)));
-    setHtml($('#reviveYes'), bux(PRODUCTS.Revive.price) + ' Bux');
     const boostLeft = (S.boostUntil - net.now()) / 1000;
     el.boost.hidden = boostLeft <= 0;
     if (boostLeft > 0) el.boost.textContent = '⚡ x' + CFG.boostMult + ' SPEED BOOST ' + clock(boostLeft);
@@ -138,7 +137,6 @@ export function buy(kind, key) {
 async function buyBux(kind, key) {
     const r = await BX.buyWithBux(kind, key);
     if (r.success) { toast('Purchase complete!', '#7dff6b'); return; }
-    if (key === 'Revive') actions.revive(false);
     if (r.error && !/cancel/i.test(r.error)) toast(r.error, '#ff5a5a');
 }
 $('#buyOk').addEventListener('click', () => {
@@ -148,31 +146,27 @@ $('#buyOk').addEventListener('click', () => {
 });
 $('#buyCancel').addEventListener('click', () => {
     $('#buy').hidden = true;
-    if (pendingBuy && pendingBuy.key === 'Revive') actions.revive(false);
     pendingBuy = null;
 });
 $('#btn2x').addEventListener('click', () => buy('pass', 'DoubleSpeed'));
 document.querySelectorAll('[data-product]').forEach((b) => b.addEventListener('click', () => buy('product', b.dataset.product)));
 
-// ----- revive popup -----
+// ----- revive button -----
+// After dying you are back in the lobby; for a few seconds a button offers to go back to that stage
 let reviveTimer;
-export function showRevive() {
-    $('#revive').hidden = false;
-    let left = CFG.reviveTimeout;
-    $('#reviveTimer').textContent = 'Returning to lobby in ' + left + 's';
-    clearInterval(reviveTimer);
-    reviveTimer = setInterval(() => {
-        left--;
-        $('#reviveTimer').textContent = 'Returning to lobby in ' + Math.max(0, left) + 's';
-        if (left <= 0) { $('#buy').hidden = true; pendingBuy = null; actions.revive(false); }
-    }, 1000);
+export function showRevive(stageIdx) {
+    const b = $('#revive');
+    setHtml(b, 'Revive to Stage ' + (stageIdx + 1) + ' <span class="price">' + bux(PRODUCTS.Revive.price) + '</span>');
+    b.hidden = false;
+    b.classList.remove('pop'); void b.offsetWidth; b.classList.add('pop');
+    clearTimeout(reviveTimer);
+    reviveTimer = setTimeout(hideRevive, CFG.reviveTimeout * 1000);
 }
 export function hideRevive() {
-    clearInterval(reviveTimer);
+    clearTimeout(reviveTimer);
     $('#revive').hidden = true;
 }
-$('#reviveYes').addEventListener('click', () => { hideRevive(); buy('product', 'Revive'); });
-$('#reviveNo').addEventListener('click', () => actions.revive(false));
+$('#revive').addEventListener('click', () => { hideRevive(); buy('product', 'Revive'); });
 
 // ----- panels -----
 let modalKind = null;

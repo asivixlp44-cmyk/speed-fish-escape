@@ -1,6 +1,6 @@
 import { T, texFrom } from './engine.js';
 
-// Canvas-generated surface textures: cracked lava, water, bricks and hanging banners.
+// Canvas-generated surface textures: cracked lava, water, bricks, studded walls and cracked stone.
 
 // Tileable Voronoi lava: bright yellow cell centres, orange body, dark cracks
 function lavaCanvas() {
@@ -80,11 +80,12 @@ function waterCanvas() {
             }
             const edge = Math.sqrt(f2) - Math.sqrt(f1);
             const i = (py * N + px) * 4;
-            const k = Math.max(0, 1 - edge / 9);
-            const w = k * k * (3 - 2 * k);
-            d[i] = Math.round(40 + 205 * w);
-            d[i + 1] = Math.round(200 + 55 * w);
-            d[i + 2] = Math.round(235 + 20 * w);
+            // Rounded cyan blobs separated by wide pale bands, like Roblox's water material
+            const k = Math.min(1, Math.max(0, (edge - 5) / 7));
+            const w = 1 - k * k * (3 - 2 * k);
+            d[i] = Math.round(38 + 190 * w);
+            d[i + 1] = Math.round(205 + 43 * w);
+            d[i + 2] = Math.round(238 + 17 * w);
             d[i + 3] = 255;
         }
     }
@@ -137,25 +138,46 @@ export function waterMaterial(rx, ry) {
     return m;
 }
 
-// Hanging Atlantis banner with a fish and a vertical word
-export function bannerMaterial(bg, word) {
-    const id = 'banner' + bg + word;
-    if (cache.has(id)) return cache.get(id);
-    const c = document.createElement('canvas'); c.width = 128; c.height = 320;
+// Roblox-style wall studs: a small raised square per 2x2 studs, lit from the top-left.
+// Drawn white so the material colour tints it.
+function studCanvas(cracks) {
+    const N = 64, c = document.createElement('canvas'); c.width = c.height = N;
     const x = c.getContext('2d');
-    const g = x.createLinearGradient(0, 0, 0, 320);
-    g.addColorStop(0, bg[0]); g.addColorStop(1, bg[1]);
-    x.fillStyle = g; x.fillRect(0, 0, 128, 300);
-    x.beginPath(); x.moveTo(0, 300); x.lineTo(64, 320); x.lineTo(128, 300); x.fill();
-    x.strokeStyle = '#ffd028'; x.lineWidth = 6; x.strokeRect(8, 8, 112, 284);
-    x.font = '72px sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
-    x.fillText('🐠', 64, 64);
-    x.font = '700 40px Fredoka, sans-serif'; x.fillStyle = '#ffffff';
-    x.lineWidth = 6; x.strokeStyle = 'rgba(0,0,0,0.45)';
-    [...word].forEach((ch, i) => { x.strokeText(ch, 64, 130 + i * 40); x.fillText(ch, 64, 130 + i * 40); });
-    const m = new T.MeshLambertMaterial({ map: texFrom(c), transparent: true, side: T.DoubleSide });
+    x.fillStyle = '#ffffff'; x.fillRect(0, 0, N, N);
+    if (cracks) {
+        // Pale branching cracks for the Stage 2 stone
+        x.strokeStyle = 'rgba(255,255,255,0.9)'; x.lineWidth = 1.6;
+        let s = 99;
+        const rnd = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
+        for (let i = 0; i < 5; i++) {
+            let px = rnd() * N, py = rnd() * N;
+            x.beginPath(); x.moveTo(px, py);
+            for (let k = 0; k < 4; k++) { px += (rnd() - 0.5) * 30; py += (rnd() - 0.5) * 30; x.lineTo(px, py); }
+            x.stroke();
+        }
+    }
+    for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) {
+        const ox = 8 + i * 32, oy = 8 + j * 32, s = 14;
+        x.fillStyle = 'rgba(0,0,0,0.28)'; x.fillRect(ox + 2, oy + 2, s, s);
+        x.fillStyle = '#d6d6d6'; x.fillRect(ox, oy, s, s);
+        x.fillStyle = '#ffffff'; x.fillRect(ox, oy, s - 3, 2.5); x.fillRect(ox, oy, 2.5, s - 3);
+    }
+    return c;
+}
+const studImg = studCanvas(false);
+const crackImg = studCanvas(true);
+
+// Studded wall surface (1 texture tile = 4 studs), tinted by colour
+export function studWallMaterial(color, rx, ry) {
+    const id = 'studMat' + color + Math.round(rx) + 'x' + Math.round(ry);
+    if (cache.has(id)) return cache.get(id);
+    const m = new T.MeshLambertMaterial({ color, map: repeated(studImg, 'stud', rx, ry) });
     cache.set(id, m);
     return m;
+}
+// Grey studded stone with pale cracks (Stage 2's falling walls); a fresh material so each can flash
+export function crackedStoneMaterial(rx, ry) {
+    return new T.MeshLambertMaterial({ color: 0x8e8ca4, map: repeated(crackImg, 'crack', rx, ry) });
 }
 
 export function updateMaterials(dt) {

@@ -80,7 +80,7 @@ button:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
 #offer .sub { font-size: 0.85rem; color: #d8f0ff; font-variant-numeric: tabular-nums; }
 #offer .yes, #offer .no { font-size: 0.95rem; padding: 0.3rem 0.6rem; }
 
-#boost { position: absolute; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 5.2rem); transform: translateX(-50%); font-size: 1.1rem; font-weight: 700; color: var(--yellow); white-space: nowrap; }
+#boost { position: absolute; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 8.6rem); transform: translateX(-50%); font-size: 1.1rem; font-weight: 700; color: var(--yellow); white-space: nowrap; }
 
 #bottom { position: absolute; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 0.9rem); transform: translateX(-50%); display: grid; justify-items: center; gap: 0.35rem; width: min(26rem, 70vw); }
 #sprintHint { font-size: 1.25rem; font-weight: 700; color: var(--yellow); letter-spacing: 0.02em; }
@@ -95,8 +95,9 @@ button:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
 #stamTxt { left: 50%; transform: translate(-50%, -50%); font-size: 0.85rem; }
 
 #stageTitle { position: absolute; left: 50%; top: 20%; transform: translateX(-50%); text-align: center; pointer-events: none; transition: opacity 0.6s ease; }
-#stageTitle .n { font-size: 4rem; font-weight: 700; line-height: 1; }
+#stageTitle .n { font-size: 6.5rem; font-weight: 700; line-height: 1; color: #fff; text-shadow: -4px -4px 0 #1a1f5c, 4px -4px 0 #1a1f5c, -4px 4px 0 #1a1f5c, 4px 4px 0 #1a1f5c, 0 5px 0 #1a1f5c, 0 -5px 0 #1a1f5c, 5px 0 0 #1a1f5c, -5px 0 0 #1a1f5c, 0 8px 0 #0e1238; }
 #stageTitle .s { font-size: 2.6rem; font-weight: 700; line-height: 1.1; }
+#stageTitle .s:empty { display: none; }
 
 #toasts { position: absolute; left: 50%; top: 33%; transform: translateX(-50%); display: grid; justify-items: center; gap: 0.3rem; pointer-events: none; }
 .toast { font-size: 1.5rem; font-weight: 700; white-space: nowrap; animation: toast 2.4s ease forwards; }
@@ -167,14 +168,16 @@ body.touch #sprintHint { display: none; }
 .rebirth-box p { margin: 0; font-size: 1rem; color: #cfe6ff; }
 .rebirth-box button { font-size: 1.5rem; padding: 0.6rem; }
 
-#buy .panel, #revive .panel { width: min(24rem, 100%); }
+#buy .panel { width: min(24rem, 100%); }
+#revive { position: absolute; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 5.4rem); transform: translateX(-50%); display: flex; align-items: center; gap: 0.5rem; font-size: 1.25rem; padding: 0.35rem 0.6rem 0.35rem 1rem; white-space: nowrap; }
+#revive .price { font-size: 0.95rem; background: rgba(22, 18, 31, 0.3); border-radius: 0.5rem; padding: 0.1rem 0.4rem; }
+#revive.pop { animation: popIn 0.34s cubic-bezier(0.2, 1.5, 0.4, 1); }
 .buy-body { display: grid; gap: 0.8rem; justify-items: center; text-align: center; padding: 1.2rem 1rem 1rem; }
 .buy-body .item { font-size: 1.6rem; font-weight: 700; }
 .buy-body .cost { font-size: 1.3rem; font-weight: 700; color: #7dff6b; }
 .buy-body .note { font-size: 0.9rem; color: #bfd8f5; margin: 0; }
 .buy-body .acts { display: flex; gap: 0.7rem; width: 100%; }
 .buy-body .acts button { flex: 1; font-size: 1.25rem; padding: 0.55rem; }
-#reviveTimer { font-size: 1rem; color: #ffd0d0; }
 
 /* Start screen ------------------------------------------------------------ */
 #start { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 1rem; background: radial-gradient(ellipse at center, rgba(8, 40, 90, 0.45), rgba(6, 22, 52, 0.9)); }
@@ -333,6 +336,7 @@ body.touch #tips { bottom: calc(env(safe-area-inset-bottom, 0px) + 16rem); }
         </div>
 
         <div id="boost" class="o passive" hidden></div>
+        <button class="btn g-green o1" id="revive" hidden>Revive to Stage 1</button>
 
         <div id="bottom" class="passive">
             <div id="sprintHint" class="o">HOLD SHIFT TO SPRINT!</div>
@@ -340,7 +344,7 @@ body.touch #tips { bottom: calc(env(safe-area-inset-bottom, 0px) + 16rem); }
             <div class="bar" id="stamBar"><div class="fill" id="stamFill"></div><span class="o1" id="stamTxt">💨 12/12</span></div>
         </div>
 
-        <div id="stageTitle" style="opacity:0"><div class="n o" id="stageName">Stage 1</div><div class="s o" id="stageSub">ESCAPE</div></div>
+        <div id="stageTitle" style="opacity:0"><div class="n" id="stageName">Stage 1</div><div class="s o" id="stageSub">ESCAPE</div></div>
         <div id="levelBanner" class="o"></div>
         <div id="toasts"></div>
         <button id="promptBtn" hidden><kbd>E</kbd><span id="promptTxt"></span></button>
@@ -371,16 +375,6 @@ body.touch #tips { bottom: calc(env(safe-area-inset-bottom, 0px) + 16rem); }
         </div>
     </div>
 
-    <div id="revive" class="overlay" hidden>
-        <div class="panel" role="dialog" aria-labelledby="reviveTitle">
-            <header style="background:linear-gradient(#ff5a5a,#b3122a)"><h2 class="o" id="reviveTitle">💀 REVIVE</h2></header>
-            <div class="buy-body">
-                <div class="item o1">Revive where you fell?</div>
-                <div id="reviveTimer">Returning to lobby in 10s</div>
-                <div class="acts"><button class="btn g-green o1" id="reviveYes"><i class="bx" aria-hidden="true"></i>9 Bux</button><button class="btn g-red o1" id="reviveNo">No!</button></div>
-            </div>
-        </div>
-    </div>
 
     <div id="offline" class="overlay" hidden>
         <div class="panel" role="alertdialog" aria-labelledby="offlineTitle">

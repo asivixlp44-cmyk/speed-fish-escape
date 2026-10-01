@@ -389,46 +389,6 @@ export function updateAuraFx(fx, aura, t) {
     });
 }
 
-// ----- sea mine -----
-// Rolling hazard: dark riveted sphere with spikes and a blinking red light band
-const MINE_GEO = new T.SphereGeometry(1, 24, 16);
-const MINE_MAT = new T.MeshStandardMaterial({ color: 0x2c3444, roughness: 0.5, metalness: 0.2 });
-const SPIKE_MAT = new T.MeshStandardMaterial({ color: 0x8a94a8, roughness: 0.4, metalness: 0.3 });
-const MINE_BAND = new T.TorusGeometry(1.01, 0.06, 6, 32);
-const MINE_SPIKE = new T.CylinderGeometry(0.05, 0.14, 0.5, 6);
-const MINE_DIRS = (() => {
-    // Evenly spread spike directions (golden spiral)
-    const out = [], n = 14;
-    for (let i = 0; i < n; i++) {
-        const y = 1 - (i + 0.5) / n * 2, r = Math.sqrt(1 - y * y), a = i * 2.39996;
-        out.push(new V3(Math.cos(a) * r, y, Math.sin(a) * r));
-    }
-    return out;
-})();
-const MINE_LIGHT = new T.MeshBasicMaterial({ color: 0xff2a3a });
-export function seaMine(d, parent) {
-    const g = new T.Group();
-    const core = new T.Mesh(MINE_GEO, MINE_MAT); core.castShadow = true; g.add(core);
-    const up = new V3(0, 1, 0);
-    for (const dir of MINE_DIRS) {
-        const s = new T.Mesh(MINE_SPIKE, SPIKE_MAT);
-        s.position.copy(dir).multiplyScalar(1.12);
-        s.quaternion.setFromUnitVectors(up, dir);
-        g.add(s);
-        const cap = new T.Mesh(UNIT, SPIKE_MAT); cap.scale.setScalar(0.16); cap.position.copy(dir).multiplyScalar(1.38); g.add(cap);
-    }
-    const band = new T.Mesh(MINE_BAND, MINE_LIGHT);
-    band.rotation.x = Math.PI / 2; g.add(band);
-    g.scale.setScalar(d / 2 / 1.25);
-    (parent || scene).add(g);
-    return g;
-}
-// Blinks every mine's light band together
-export function updateMines(t) {
-    const on = Math.sin(t * 6) > 0 ? NEON_BOOST : 0.35;
-    MINE_LIGHT.color.setRGB(on, on * 0.16, on * 0.22);
-}
-
 // ----- particles & floating text -----
 const particles = [];
 export function burst(pos, color, size, count) {

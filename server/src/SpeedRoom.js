@@ -32,7 +32,7 @@ export class SpeedRoom extends Room {
         this.setState(new GameState());
         this.setPatchRate(50);
         this.sessions = new Map();
-        this.nextBall = STAGES.map(() => 0);
+        this.nextShark = STAGES.map(() => 0);
         this.joinCount = 0;
 
         this.onMessage('move', (client, m) => this.onMove(client, m));
@@ -172,23 +172,15 @@ export class SpeedRoom extends Room {
             if (mult > 1) s.client.send('gain', { n: got, tread: 1 });
         }
 
-        // Rolling sea mines and crossing sharks: one shared timeline per occupied stage
+        // Crossing sharks: one shared timeline per occupied shark stage
         STAGES.forEach((stage, i) => {
-            const hazard = stage.ballLane > 0 || stage.type === 'Sharks';
-            if (!occupied[i] || !hazard) { this.nextBall[i] = 0; return; }
-            if (!this.nextBall[i]) this.nextBall[i] = now + 1500;
-            if (now < this.nextBall[i]) return;
-            this.nextBall[i] = now + stage.bi * 1000;
-            if (stage.type === 'Sharks') {
-                // A shark swims across the lane somewhere along the stage
-                const z = stage.zS + 40 + Math.random() * (stage.cE - stage.zS - 60);
-                this.broadcast('shark', { s: i, z, dir: Math.random() < 0.5 ? -1 : 1, t: now });
-                return;
-            }
-            const min = stage.bmin || 8, max = stage.bmax || 12;
-            const d = min + Math.random() * (max - min);
-            const lane = Math.max(0, stage.ballLane - d / 2);
-            this.broadcast('ball', { s: i, x: (Math.random() * 2 - 1) * lane, d, t: now });
+            if (!occupied[i] || stage.type !== 'Sharks') { this.nextShark[i] = 0; return; }
+            if (!this.nextShark[i]) this.nextShark[i] = now + 1500;
+            if (now < this.nextShark[i]) return;
+            this.nextShark[i] = now + stage.bi * 1000;
+            // A shark swims across the lane somewhere along the stage
+            const z = stage.zS + 30 + Math.random() * (stage.cE - stage.zS - 40);
+            this.broadcast('shark', { s: i, z, dir: Math.random() < 0.5 ? -1 : 1, t: now });
         });
     }
 

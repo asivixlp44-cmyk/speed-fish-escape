@@ -3,25 +3,20 @@ import {
     texFrom, billboard, textPlane, camera,
 } from './engine.js';
 import { S, actions, net } from './state.js';
-import { lavaMaterial, brickMaterial, bannerMaterial, waterMaterial } from './textures.js';
+import { lavaMaterial, brickMaterial, waterMaterial, studWallMaterial, crackedStoneMaterial } from './textures.js';
 import { emitTread, bubble } from './fx.js';
 import { buildFish, swimFish } from './fish.js';
 import {
-    CFG, LOBBY, STAGES, TREADMILLS, TREAD_GEO, PRODUCTS, PASSES, FISH, SHARK_LOOK, GROUP_CHEST, TURTLE_MINUTES, FREE_BOOST_MINUTES,
+    CFG, LOBBY, STAGES, TREADMILLS, TREAD_GEO, PASSES, FISH, SHARK_LOOK, TURTLE_MINUTES, FREE_BOOST_MINUTES,
     fishById, fmt, sci, clamp, clock, rngFrom, buxText,
 } from '../../shared/config.js';
 
-const HX = LOBBY.halfX, HZ = LOBBY.halfZ, WALLH = LOBBY.wallHeight;
+const HX = LOBBY.halfX, HZ = LOBBY.halfZ;
 // Lobby colours from the reference: blue studded pool, brown stone paths, sand, gold shop,
 // pale blue-grey Atlantis terraces with yellow trim, gold towers with pink domes
 const LC = {
     pool: 0x3a86e8, stone: 0x9a7e74, sand: 0xf5d65a, trim: 0xffd23a, gold: 0xf2c230, goldDark: 0xd8a020,
     terrace: 0xaab4cc, terraceDark: 0x8e98b4, pad: 0xffe23a, dome: 0xffa8c8, kelp: 0x2ee07a, kelpDark: 0x1aa85a,
-};
-// Course: water lanes, blue stone walls, sandstone pillars
-const CC = {
-    red: 0xe82434, wall: 0x5c6c94, sidewalk: 0xe0c070, ceiling: 0x1c2c52, pillar: 0xf0b43c, spike: 0x7fe8ff,
-    falling: 0x8a96b0, yellow: 0xffd028, purple: 0xc428ff, chase: 0x3c4a78, ledge: 0x6a78a0, plaque: 0x2a5aa8, gold: 0xffc83a,
 };
 const CORAL = [0xff4a6a, 0xff9a3c, 0xffd028, 0xff6ec7, 0xb45aff, 0x3ce8c8];
 
@@ -284,17 +279,6 @@ export function renderBoards(msg) {
         drawBoard(boards[kind], rows, kind);
     }
 }
-// Stage 1 / course end chest
-function treasureChest(pos, face) {
-    const g = new T.Group(); g.position.copy(pos); g.rotation.y = Math.atan2(face.x, face.z); scene.add(g);
-    const part = (sx, sy, sz, x, y, z, c, o) => { const m = new T.Mesh(UNIT, mat(c, o)); m.scale.set(sx, sy, sz); m.position.set(x, y, z); m.castShadow = !(o && o.neon); g.add(m); return m; };
-    part(6, 3.4, 4, 0, 1.7, 0, 0x8a4a1c);
-    part(6.2, 0.5, 4.2, 0, 1.2, 0, 0xffc83a);
-    const lid = part(6.1, 1.6, 4.1, 0, 4.1, -0.6, 0x9a5424); lid.rotation.x = -0.5;
-    part(1, 1, 0.3, 0, 2.6, 2.1, 0xffc83a);
-    for (let i = 0; i < 9; i++) part(0.9, 0.9, 0.9, (i % 3 - 1) * 1.5, 3.5 + (i % 2) * 0.3, (Math.floor(i / 3) - 1) * 0.9, i % 4 ? 0xffd84a : 0x7fe8ff, { neon: i % 4 === 0 });
-    solids.push(aabb(pos.x, 2, pos.z, 6.4, 4, 6.4));
-}
 
 // =====================================================================================
 // Fish shop pedestals: a yellow pad you step on, the fish hovering above it
@@ -498,17 +482,10 @@ function buildLobby() {
 }
 
 // =====================================================================================
-// Course
+// Course, modelled on reference/game satges.mp4. Stages sit end to end along +z; each
+// starts behind a "Stage N" wall and ends on a grey landing with the Wins pads.
 // =====================================================================================
-const SPIKE_GEO = new T.ConeGeometry(1.5, 4, 6);
-// Ice-crystal spike cluster (the cyan shards in the reference)
-function spike(x, y, z) {
-    const m = new T.Mesh(SPIKE_GEO, mat(CC.spike));
-    m.position.set(x, y + 2, z); m.castShadow = true; scene.add(m);
-    const m2 = new T.Mesh(SPIKE_GEO, mat(0xbff6ff));
-    m2.scale.set(0.5, 0.6, 0.5); m2.position.set(x + 0.9, y + 1.2, z + 0.5); m2.rotation.z = -0.35; scene.add(m2);
-    const k = aabb(x, y + 1.5, z, 2, 3, 2); k.active = true; kills.push(k);
-}
+const STAGE_H = 44;
 function texturedBox(sx, sy, sz, x, y, z, material) {
     const m = new T.Mesh(UNIT, material);
     m.scale.set(sx, sy, sz); m.position.set(x, y, z);
@@ -517,113 +494,253 @@ function texturedBox(sx, sy, sz, x, y, z, material) {
     scene.add(m);
     return m;
 }
-// Walkable water-textured floor slab with its top at y = top
-function waterFloor(sx, sz, x, z, top) {
-    top = top || 0;
-    texturedBox(sx, 2, sz, x, top - 1, z, waterMaterial(sx / 14, sz / 14));
-    solids.push(aabb(x, top - 1, z, sx, 2, sz));
+// Solid box with a studded texture on every face
+function studBox(sx, sy, sz, x, y, z, color, o) {
+    const m = texturedBox(sx, sy, sz, x, y, z, studWallMaterial(color, Math.max(sx, sz) / 4, sy / 4));
+    if (!(o && o.decor)) solids.push(aabb(x, y, z, sx, sy, sz));
+    return m;
 }
-function lavaPillar(x, z, h) {
-    const sy = h + 10;
-    texturedBox(3.5, sy, 3.5, x, -10 + sy / 2 - 6, z, lavaMaterial(1, sy / 6));
-    const k = aabb(x, -10 + sy / 2 - 6, z, 3.5, sy, 3.5); k.active = true; kills.push(k);
+// Walkable water slab with its top at y = top, reaching `depth` studs down
+function waterFloor(sx, sz, x, z, top, depth) {
+    top = top || 0; depth = depth || 2;
+    texturedBox(sx, depth, sz, x, top - depth / 2, z, waterMaterial(sx / 14, sz / 14));
+    solids.push(aabb(x, top - depth / 2, z, sx, depth, sz));
 }
-function lavaPit(z0, z1) {
+function lavaPit(w, z0, z1) {
     const len = z1 - z0;
-    texturedBox(CFG.courseWidth, 1, len, 0, -6.5, z0 + len / 2, lavaMaterial(CFG.courseWidth / 14, len / 14));
-    const k = aabb(0, -22, z0 + len / 2, CFG.courseWidth, 34, len); k.active = true; kills.push(k);
+    texturedBox(w, 1, len, 0, -6.5, z0 + len / 2, lavaMaterial(w / 14, len / 14));
+    const k = aabb(0, -22, z0 + len / 2, w, 34, len); k.active = true; kills.push(k);
 }
-// Pink sneaker worth +Speed
+// Glowing lava column from the pit up to the ceiling (the orange pillars in Stage 1)
+function lavaPillar(x, z, top) {
+    const sy = top + 8;
+    texturedBox(3, sy, 3, x, -8 + sy / 2, z, lavaMaterial(1, sy / 6));
+    const k = aabb(x, -8 + sy / 2, z, 3, sy, 3); k.active = true; kills.push(k);
+}
+const CONE = new T.ConeGeometry(1, 1, 6);
+function cone(x, y, z, r, h, color) {
+    const m = new T.Mesh(CONE, mat(color));
+    m.scale.set(r, h, r); m.position.set(x, y + h / 2, z); m.castShadow = true;
+    scene.add(m);
+    return m;
+}
+// Pink sneaker worth +Speed, with its "+1 Speed" label floating underneath
 function addPickup(stageIdx, x, y, z, amount) {
     const g = new T.Group();
-    const body = new T.Mesh(UNIT, mat(0xff3f7a)); body.scale.set(1.6, 1, 2.8); body.position.y = 0.3; g.add(body);
+    const body = new T.Mesh(UNIT, mat(0xe8386a)); body.scale.set(1.6, 1, 2.8); body.position.y = 0.3; g.add(body);
     const sole = new T.Mesh(UNIT, mat(0xffffff)); sole.scale.set(1.75, 0.35, 3); sole.position.y = -0.3; g.add(sole);
-    const ankle = new T.Mesh(UNIT, mat(0xff3f7a)); ankle.scale.set(1.5, 1, 1.2); ankle.position.set(0, 1, -0.8); g.add(ankle);
-    const swoosh = new T.Mesh(UNIT, mat(0xffffff, { neon: true })); swoosh.scale.set(1.62, 0.2, 1.6); swoosh.position.set(0, 0.35, 0.1); g.add(swoosh);
-    const glow = new T.Mesh(new T.CylinderGeometry(1.8, 1.8, 0.1, 20), mat(0x6fe0ff, { neon: true, opacity: 0.45 })); glow.position.y = -1.3; g.add(glow);
-    g.position.set(x, y + 1.8, z);
+    const ankle = new T.Mesh(UNIT, mat(0xe8386a)); ankle.scale.set(1.5, 1, 1.2); ankle.position.set(0, 1, -0.8); g.add(ankle);
+    const toe = new T.Mesh(UNIT, mat(0xffffff)); toe.scale.set(1.62, 0.5, 0.6); toe.position.set(0, 0, 1.2); g.add(toe);
+    g.position.set(x, y + 2.4, z);
     scene.add(g);
+    billboard([{ t: '+' + amount + ' Speed', c: '#2a8cff', s: '#ffffff', px: 64 }], 4.2, 512, new V3(x, y + 0.9, z));
     const id = stageIdx + ':' + pickups.filter((p) => p.stage === stageIdx).length;
-    pickups.push({ id, stage: stageIdx, g, base: y + 1.8, amount, respawnAt: 0, phase: Math.random() * 6 });
+    pickups.push({ id, stage: stageIdx, g, base: y + 2.4, amount, respawnAt: 0, phase: Math.random() * 6 });
 }
-function chevrons(z0, count) {
-    for (let i = 0; i < count; i++) {
-        textPlane([{ t: '^', c: '#ffffff', px: 180 }], 6, 256, new V3(0, 0.06, z0 + i * 8), new V3(0, 10, z0 + i * 8)).rotation.set(-Math.PI / 2, 0, Math.PI);
+// Side walls and ceiling for an enclosed stage
+function enclosure(s, wallMat, ceilColor, h) {
+    const mid = s.zS + s.len / 2;
+    for (const sx of [-1, 1]) {
+        texturedBox(2, h + 10, s.len, sx * (s.w / 2 + 1), (h + 10) / 2 - 8, mid, wallMat);
+        solids.push(aabb(sx * (s.w / 2 + 1), (h + 10) / 2 - 8, mid, 2, h + 10, s.len));
+    }
+    studBox(s.w + 4, 2, s.len, 0, h + 1, mid, ceilColor, { decor: true });
+}
+// White light panels set into a dark ceiling (Stages 3 and 4)
+function ceilingLights(s, h) {
+    for (let z = s.zS + 8; z < s.zE - 4; z += 14) {
+        for (let x = -s.w / 2 + 8; x <= s.w / 2 - 6; x += 14) box(3.4, 0.3, 1.6, x + ((z / 14) % 2 ? 4 : 0), h - 0.1, z, 0xffffff, { neon: true, decor: true });
     }
 }
-function stageSigns(s, idx) {
-    // Stage 1's title floats in front of the tunnel, like the reference; the others sit on the lintel
-    const y = idx ? 33.5 : 20, z = idx ? s.zS + 0.2 : s.zS - 5;
-    textPlane([{ t: s.name, c: '#ffffff', s: '#16121f', px: 150 }, { t: s.sub, c: s.subColor, s: '#16121f', px: 120 }], 30, 1024, new V3(0, y, z), new V3(0, y, z - 10));
-    const pz = s.zS + 22;
-    box(0.4, 5, 12, -CFG.courseWidth / 2 + 0.2, 8, pz, CC.plaque, { decor: true });
-    textPlane([{ t: 'Recommended :', c: '#ffffff', s: '#16121f', px: 60 }, { t: 'Lvl : ' + s.rec, c: '#ffd028', s: '#16121f', px: 70 }], 10, 512, new V3(-CFG.courseWidth / 2 + 0.5, 8, pz), new V3(10, 8, pz));
+// The "Stage N" wall across the start of a stage, with the doorway through it
+function stageWall(prev, s, mat) {
+    const half = Math.max(prev.w, s.w) / 2 + 2, D = s.door / 2, DH = 20, z = s.zS + 1;
+    texturedBox(half - D, STAGE_H + 8, 2, -(half + D) / 2, STAGE_H / 2 - 4, z, mat);
+    texturedBox(half - D, STAGE_H + 8, 2, (half + D) / 2, STAGE_H / 2 - 4, z, mat);
+    texturedBox(D * 2, STAGE_H - DH + 4, 2, 0, (STAGE_H + DH + 4) / 2, z, mat);
+    solids.push(aabb(-(half + D) / 2, STAGE_H / 2 - 4, z, half - D, STAGE_H + 8, 2), aabb((half + D) / 2, STAGE_H / 2 - 4, z, half - D, STAGE_H + 8, 2));
+    solids.push(aabb(0, (STAGE_H + DH + 4) / 2, z, D * 2, STAGE_H - DH + 4, 2));
+    const lines = [{ t: s.name, c: '#ffffff', s: '#1a1f5c', px: 170 }];
+    if (s.sub) lines.push({ t: s.sub, c: s.subColor, s: '#1a1f5c', px: 90 });
+    textPlane(lines, 28, 1024, new V3(0, DH + 10, s.zS - 0.1), new V3(0, DH + 10, s.zS - 10));
 }
-function returnPad(stageIdx, x, z, wins, finish) {
-    const pad = new T.Mesh(new T.CylinderGeometry(5, 5, 0.4, 32), mat(finish ? CC.purple : CC.yellow, { neon: true }));
-    pad.position.set(x, 0.2, z); scene.add(pad);
-    billboard([{ t: '+' + wins + ' Wins', c: '#ffd028', s: '#16121f', px: 80 }, { t: finish ? 'FINISH!' : 'Return to lobby', c: '#ffffff', s: '#16121f', px: 46 }], 10, 512, new V3(x, 8, z));
-    const tr = aabb(x, 3, z, 10, 6, 10);
-    tr.enter = () => actions.pad(stageIdx);
-    triggers.push(tr);
+// Grey landing at the end of a stage: "+N Wins / Return!" pad left, "x2 Wins!" pad right
+function landing(i, s, finish) {
+    const w = Math.max(s.w, 30);
+    studBox(w, 2, CFG.endZone, 0, -1, s.cE + CFG.endZone / 2, 0x6c6a8a);
+    const pz = s.cE + CFG.endZone / 2;
+    const pad = (x, color, lines, enter) => {
+        const m = new T.Mesh(UNIT, mat(color, { neon: true }));
+        m.scale.set(9, 0.3, 5); m.position.set(x, 0.15, pz); m.rotation.y = x > 0 ? 0.35 : -0.35; scene.add(m);
+        billboard(lines, 8, 512, new V3(x, 4.5, pz));
+        const tr = aabb(x, 2.5, pz, 9, 5, 6);
+        tr.enter = enter;
+        triggers.push(tr);
+    };
+    // Facing down the course, +x is on the left: Return on the left, x2 on the right
+    pad(w / 2 - 7, 0xffd23a, [{ t: '+' + s.wins + ' Wins', c: '#ffd028', s: '#16121f', px: 80 }, { t: finish ? 'FINISH!' : 'Return!', c: '#ffffff', s: '#16121f', px: 50 }], () => actions.pad(i));
+    pad(-w / 2 + 7, 0xff2ad8, [{ t: 'x2 Wins!', c: '#ff7ae0', s: '#16121f', px: 80 }, { t: 'Only ' + buxText(PASSES.DoubleWins.price), c: '#ffffff', s: '#16121f', px: 46 }], () => actions.buy('pass', 'DoubleWins'));
 }
-function doubleWinsPad(x, z) {
-    const pad = new T.Mesh(new T.CylinderGeometry(4, 4, 0.4, 32), mat(CC.purple, { neon: true }));
-    pad.position.set(x, 0.2, z); scene.add(pad);
-    billboard([{ t: 'x2 Wins', c: '#e27bff', s: '#16121f', px: 80 }, { t: buxText(PASSES.DoubleWins.price), c: '#ffd23a', s: '#16121f', px: 50 }], 8, 512, new V3(x, 7, z));
-    const tr = aabb(x, 3, z, 8, 6, 8);
-    tr.enter = () => actions.buy('pass', 'DoubleWins');
-    triggers.push(tr);
+// Tall bright sea-grass clump whose blades sway (Stage 4)
+function seaGrass(rng, x, z, h) {
+    const g = new T.Group(); g.position.set(x, 0, z); scene.add(g);
+    const blades = [];
+    for (let i = 0; i < 9; i++) {
+        const b = new T.Mesh(UNIT, mat(i % 3 ? 0x4cf05a : 0x2ed84a));
+        const bh = h * (0.6 + rng() * 0.4);
+        b.scale.set(0.5, bh, 0.16); b.position.y = bh / 2;
+        const p = new T.Group(); p.rotation.set((rng() - 0.5) * 0.7, rng() * Math.PI, (rng() - 0.5) * 0.7); p.add(b); g.add(p);
+        blades.push(p);
+    }
+    const ph = rng() * 6;
+    tickers.push((dt, t) => {
+        if (camera.position.distanceToSquared(g.position) > 140 * 140) return;
+        blades.forEach((p, i) => { p.rotation.z = Math.sin(t * 1.3 + ph + i) * 0.12 + (i % 2 ? 0.2 : -0.2); });
+    });
+}
+// Cluster of brown rock cubes hanging from a ceiling (Stage 1)
+function hangingRocks(rng, x, z, top) {
+    let y = top;
+    for (let i = 0; i < 4; i++) {
+        const s = 2.2 + rng() * 1.8;
+        y -= s * 0.7;
+        studBox(s, s, s, x + (rng() - 0.5) * 2.5, y, z + (rng() - 0.5) * 2.5, i % 2 ? 0xa07850 : 0x8e6a48, { decor: true });
+    }
+}
+// Stepped terraces with yellow trim beside the open Stage 2 bridge
+function terraceBank(rng, side, z0, z1) {
+    for (let z = z0; z < z1; z += 16) {
+        let h = 0;
+        for (let k = 0; k < 3; k++) {
+            h += 8 + rng() * 12;
+            const x = side * (32 + k * 14 + rng() * 4);
+            studBox(14, h, 16.2, x, h / 2 - 6, z + 8, k % 2 ? LC.terraceDark : LC.terrace, { decor: true });
+            box(14.4, 0.8, 0.7, x, h - 6.2, z + 0.4, LC.trim, { decor: true });
+        }
+    }
 }
 
-function buildLavaPath(i, s, rng, z0, z1) {
-    const pw = s.pw, len = z1 - z0, mid = z0 + len / 2;
-    lavaPit(z0, z1);
-    waterFloor(pw, len, 0, mid);
-    for (const sx of [-1, 1]) {
-        box(0.8, 0.1, len, sx * (pw / 2 - 0.4), 0.05, mid, CC.red, { decor: true });
-        box(4, 2, len, sx * (CFG.courseWidth / 2 - 2), -1, mid, CC.sidewalk, { studs: true });
+// Stage 1: water slabs stepping up and down over a lava pit, lava columns, spikes and hanging rocks
+function buildOcean(i, s, rng) {
+    const W = s.w, H = STAGE_H, z1 = s.cE;
+    enclosure(s, studWallMaterial(0x8ea2c8, s.len / 4, (H + 10) / 4), 0x4a5068, H);
+    studBox(W, 2, 16, 0, -1, s.zS + 8, LC.sand);
+    lavaPit(W, s.zS + 16, z1);
+    let z = s.zS + 16, x = 0, k = 0;
+    const tops = [];
+    while (z < z1 - 1) {
+        const len = Math.min(16 + rng() * 10, z1 - z);
+        const pw = 12 + rng() * 7;
+        x = clamp(x + (rng() * 2 - 1) * 4, -(W / 2 - pw / 2 - 3), W / 2 - pw / 2 - 3);
+        const y = [0, 1.5, 3, 1.5][k % 4];
+        waterFloor(pw, len, x, z + len / 2, y, y + 7);
+        tops.push({ x, y, z: z + len / 2, pw });
+        // Spikes poking up out of the lava beside the slab
+        for (const sd of [-1, 1]) if (rng() < 0.7) {
+            const cx = x + sd * (pw / 2 + 1.5 + rng() * 3);
+            cone(cx, -6, z + rng() * len, 1.1, 7 + rng() * 3, rng() < 0.5 ? 0x6fe8ff : 0x6a6e80);
+        }
+        z += len; k++;
     }
-    for (let z = z0 + 24; z < z1 - 10; z += 22) {
-        const n = 1 + Math.floor(rng() * 2);
-        for (let k = 0; k < n; k++) spike((rng() * 2 - 1) * (pw / 2 - 2.5), 0, z + rng() * 8);
+    for (let pz = s.zS + 30; pz < z1; pz += 42) for (const sd of [-1, 1]) lavaPillar(sd * (W / 2 - 3 - rng() * 4), pz + rng() * 12, H);
+    for (let pz = s.zS + 24; pz < z1; pz += 26) {
+        hangingRocks(rng, (rng() * 2 - 1) * (W / 2 - 6), pz, H);
+        const sd = rng() < 0.5 ? -1 : 1;
+        box(0.8, 0.6, 9, sd * (W / 2 - 0.4), 5 + rng() * 3, pz + 6, 0xffc83a, { decor: true });
+        box(0.8, 3, 0.6, sd * (W / 2 - 0.4), 4, pz + 1.8, 0xffc83a, { decor: true });
     }
-    for (let z = z0 + 30; z < z1; z += 40) for (const sx of [-1, 1]) lavaPillar(sx * (pw / 2 + 3.5), z + rng() * 10, 4 + rng() * 10);
-    for (let k = 0; k < 8; k++) addPickup(i, (rng() * 2 - 1) * (pw / 2 - 2), 0, z0 + 20 + (len - 30) * k / 7, s.pickup);
+    for (let n = 1; n < tops.length; n += 2) addPickup(i, tops[n].x + (rng() - 0.5) * 4, tops[n].y, tops[n].z, s.pickup);
 }
-function buildFallingWalls(i, s, rng, z0, z1) {
-    const len = z1 - z0, W = CFG.courseWidth;
-    waterFloor(W, len, 0, z0 + len / 2);
-    let k = 0;
-    for (let z = z0 + 26; z < z1 - 14; z += 34, k++) {
-        box(W, 0.1, 8, 0, 0.05, z, CC.red, { decor: true });
-        const m = new T.Mesh(UNIT, brickMaterial(CC.falling, W / 8, 30 / 6).clone()); m.scale.set(W, 30, 8); m.castShadow = true; scene.add(m);
-        const c = aabb(0, 31, z, W, 30, 8); solids.push(c);
-        slabs.push({ m, c, z, phase: k * 1.1 });
+// Stage 2: an open bridge over a lava sea. Water strips alternate with red strips, and a grey
+// cracked stone wall hanging over each red strip slams down onto it (server-clock timing).
+const SLAB_H = 36, SLAB_RAISE = 24, RED_LEN = 10, WATER_LEN = 16;
+function buildFallingWalls(i, s, rng) {
+    const W = s.w, mid = s.zS + s.len / 2;
+    texturedBox(260, 1, s.len + 40, 0, -5.5, mid, lavaMaterial(260 / 14, (s.len + 40) / 14));
+    const kill = aabb(0, -20, mid, 260, 28, s.len + 40); kill.active = true; kills.push(kill);
+    terraceBank(rng, -1, s.zS, s.zE);
+    terraceBank(rng, 1, s.zS, s.zE);
+    waterFloor(W, 20, 0, s.zS + 10);
+    let z = s.zS + 20, k = 0;
+    while (z + RED_LEN + WATER_LEN <= s.cE) {
+        studBox(W, 2, RED_LEN, 0, -1, z + RED_LEN / 2, 0xe8182c);
+        const m = new T.Mesh(UNIT, crackedStoneMaterial(W / 4, SLAB_H / 4));
+        m.scale.set(W, SLAB_H, RED_LEN); m.castShadow = true; scene.add(m);
+        const c = aabb(0, SLAB_RAISE + SLAB_H / 2, z + RED_LEN / 2, W, SLAB_H, RED_LEN); solids.push(c);
+        slabs.push({ m, c, z: z + RED_LEN / 2, phase: k * 1.7 });
+        waterFloor(W, WATER_LEN, 0, z + RED_LEN + WATER_LEN / 2);
+        if (k % 2 === 0) addPickup(i, (rng() * 2 - 1) * (W / 2 - 4), 0, z + RED_LEN + WATER_LEN / 2, s.pickup);
+        z += RED_LEN + WATER_LEN; k++;
     }
-    for (let n = 0; n < 8; n++) addPickup(i, (rng() * 2 - 1) * 16, 0, z0 + 24 + (len - 24) * n / 7, s.pickup);
+    if (z < s.cE) waterFloor(W, s.cE - z, 0, (z + s.cE) / 2);
 }
-// Rows of tall gold walls, each with one gap; the gap moves side to side from row to row
-function buildMaze(i, s, rng, z0, z1) {
-    const len = z1 - z0, W = CFG.courseWidth, H = 22, GAP = 8;
-    waterFloor(W, len, 0, z0 + len / 2);
-    let k = 0, lastX = 0;
-    const gaps = [];
-    for (let z = z0 + 22; z < z1 - 12; z += 20, k++) {
-        let gx = clamp((rng() * 2 - 1) * (W / 2 - GAP / 2 - 1), -(W / 2 - GAP / 2 - 1), W / 2 - GAP / 2 - 1);
-        if (Math.abs(gx - lastX) < 10) gx = clamp(lastX + (lastX > 0 ? -1 : 1) * (12 + rng() * 8), -(W / 2 - GAP / 2 - 1), W / 2 - GAP / 2 - 1);
-        lastX = gx;
-        const l0 = -W / 2, l1 = gx - GAP / 2, r0 = gx + GAP / 2, r1 = W / 2;
-        if (l1 - l0 > 0.5) box(l1 - l0, H, 3, (l0 + l1) / 2, H / 2, z, CC.gold, { studs: true, cast: true });
-        if (r1 - r0 > 0.5) box(r1 - r0, H, 3, (r0 + r1) / 2, H / 2, z, CC.gold, { studs: true, cast: true });
-        box(GAP + 1, 1.2, 3.4, gx, H - 0.6, z, 0xe0a020, { decor: true });
-        gaps.push({ x: gx, z });
+// Stage 3: a real maze of tall gold walls on a water floor, under a dark ceiling with lights.
+// Carved with a seeded depth-first search, then a few extra walls knocked out for loops.
+function buildMaze(i, s, rng) {
+    const W = s.w, H = 26, C = 16, COLS = Math.round(W / C);
+    const gold = studWallMaterial(0xd8a820, s.len / 4, (H + 10) / 4);
+    enclosure(s, gold, 0x3a2a22, H);
+    ceilingLights(s, H);
+    waterFloor(W, s.cE - s.zS, 0, (s.zS + s.cE) / 2);
+    const mz = s.zS + 8, ROWS = Math.floor((s.cE - 6 - mz) / C), mid = Math.floor(COLS / 2);
+    // walls: east[r][c] between c and c+1, north[r][c] between r and r+1
+    const east = [], north = [], seen = [];
+    for (let r = 0; r < ROWS; r++) { east.push(Array(COLS).fill(true)); north.push(Array(COLS).fill(true)); seen.push(Array(COLS).fill(false)); }
+    const stack = [[0, mid]]; seen[0][mid] = true;
+    while (stack.length) {
+        const [r, c] = stack[stack.length - 1];
+        const nb = [[r + 1, c], [r - 1, c], [r, c + 1], [r, c - 1]].filter(([a, b]) => a >= 0 && a < ROWS && b >= 0 && b < COLS && !seen[a][b]);
+        if (!nb.length) { stack.pop(); continue; }
+        const [a, b] = nb[Math.floor(rng() * nb.length)];
+        if (a > r) north[r][c] = false; else if (a < r) north[a][c] = false;
+        else if (b > c) east[r][c] = false; else east[r][b] = false;
+        seen[a][b] = true; stack.push([a, b]);
     }
-    for (let n = 0; n < gaps.length - 1; n += 2) addPickup(i, (gaps[n].x + gaps[n + 1].x) / 2, 0, (gaps[n].z + gaps[n + 1].z) / 2, s.pickup);
+    for (let n = 0; n < ROWS * COLS * 0.12; n++) {
+        const r = Math.floor(rng() * (ROWS - 1)), c = Math.floor(rng() * (COLS - 1));
+        if (rng() < 0.5) north[r][c] = false; else east[r][c] = false;
+    }
+    const wall = (sx, sz, x, z) => {
+        texturedBox(sx, H, sz, x, H / 2, z, studWallMaterial(0xd8a820, Math.max(sx, sz) / 4, H / 4));
+        solids.push(aabb(x, H / 2, z, sx, H, sz));
+    };
+    const x0 = -W / 2;
+    for (let c = 0; c < COLS; c++) if (c !== mid) wall(C + 1.5, 1.5, x0 + c * C + C / 2, mz);
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+        const cz = mz + r * C;
+        if (north[r][c] && !(r === ROWS - 1 && c === mid)) wall(C + 1.5, 1.5, x0 + c * C + C / 2, cz + C);
+        if (east[r][c] && c < COLS - 1) wall(1.5, C + 1.5, x0 + (c + 1) * C, cz + C / 2);
+    }
+    for (let n = 0; n < 12; n++) {
+        const r = Math.floor(rng() * ROWS), c = Math.floor(rng() * COLS);
+        addPickup(i, x0 + c * C + C / 2, 0, mz + r * C + C / 2, s.pickup);
+    }
 }
-function buildObby(i, s, rng, z0, z1) {
-    lavaPit(z0, z1);
-    let z = z0, x = 0, y = 0, k = 0;
+// Stage 4: brown brick hall with yellow panels, a pale floor, sea grass and crystals.
+// Sharks swim across it on the server's timeline (main.js).
+function buildSharks(i, s, rng) {
+    const W = s.w, H = 30;
+    enclosure(s, brickMaterial(0x8a5a4a, s.len / 12, (H + 10) / 6), 0x3a2a22, H);
+    ceilingLights(s, H);
+    studBox(W, 2, 18, 0, -1, s.zS + 9, 0x6c6a8a);
+    studBox(W, 2, s.cE - s.zS - 18, 0, -1, (s.zS + 18 + s.cE) / 2, 0xdff4ff);
+    for (let z = s.zS + 10; z < s.zE - 6; z += 18) for (const sd of [-1, 1]) {
+        box(0.6, 18, 11, sd * (W / 2 - 0.3), 11, z + 9, 0xe8c040, { decor: true });
+        box(3, H, 3, sd * (W / 2 - 1), H / 2, z, 0x7a4a3a, { decor: true });
+    }
+    for (let z = s.zS + 22; z < s.cE - 4; z += 13) for (const sd of [-1, 1]) {
+        seaGrass(rng, sd * (W / 2 - 3 - rng() * 2), z + rng() * 4, 9 + rng() * 6);
+        if (rng() < 0.6) cone(sd * (W / 2 - 6 - rng() * 3), 0, z + 6, 0.9, 4 + rng() * 3, 0x6fe8ff);
+    }
+    for (let n = 0; n < 10; n++) addPickup(i, (rng() * 2 - 1) * (W / 2 - 8), 0, s.zS + 26 + (s.cE - s.zS - 32) * n / 9, s.pickup);
+}
+// Stage 5: coral platforms over lava
+function buildObby(i, s, rng) {
+    const W = s.w, H = STAGE_H, z1 = s.cE;
+    enclosure(s, studWallMaterial(0x8ea2c8, s.len / 4, (H + 10) / 4), 0x4a5068, H);
+    waterFloor(W, 16, 0, s.zS + 8);
+    lavaPit(W, s.zS + 16, z1);
+    let z = s.zS + 16, x = 0, y = 0, k = 0;
     const tops = [];
     for (;;) {
         const gap = 3.5 + rng() * 3;
@@ -631,179 +748,97 @@ function buildObby(i, s, rng, z0, z1) {
         const sx = beam ? 3.5 : 7 + rng() * 6, sz = beam ? 14 : 7 + rng() * 5;
         const nz = z + gap;
         if (nz + sz > z1 - 12) break;
-        x = clamp(x + (rng() * 2 - 1) * 5, -14, 14);
+        x = clamp(x + (rng() * 2 - 1) * 5, -(W / 2 - 8), W / 2 - 8);
         y = clamp(y + [0, 0, 2, -2, 3, -3][Math.floor(rng() * 6)], 0, 9);
         box(sx, 2, sz, x, y - 1, nz + sz / 2, CORAL[k % 4], { studs: true });
         tops.push({ x, y, z: nz + sz / 2 });
         z = nz + sz; k++;
     }
     const bz = z + 4;
-    waterFloor(CFG.courseWidth, z1 - bz, 0, bz + (z1 - bz) / 2);
-    for (let pz = z0 + 20; pz < z1; pz += 36) for (const sx of [-1, 1]) lavaPillar(sx * 19, pz + rng() * 8, 6 + rng() * 14);
+    waterFloor(W, z1 - bz, 0, bz + (z1 - bz) / 2);
+    for (let pz = s.zS + 30; pz < z1; pz += 42) for (const sd of [-1, 1]) lavaPillar(sd * (W / 2 - 3), pz + rng() * 8, H);
     const step = Math.max(1, Math.floor(tops.length / 9));
     for (let n = 1; n < tops.length; n += step) addPickup(i, tops[n].x, tops[n].y, tops[n].z, s.pickup);
 }
-// Open water lane; sharks cross it on the server's timeline (main.js)
-function buildSharks(i, s, rng, z0, z1) {
-    const len = z1 - z0, W = CFG.courseWidth;
-    waterFloor(W, len, 0, z0 + len / 2);
-    for (let z = z0 + 10; z < z1; z += 16) for (const sx of [-1, 1]) kelp(rng, sx * (W / 2 - 1.5), z + rng() * 6, 12 + rng() * 14);
-    for (let n = 0; n < 10; n++) addPickup(i, (rng() * 2 - 1) * 16, 0, z0 + 20 + (len - 30) * n / 9, s.pickup);
-}
-function buildChase(i, s, rng, z0, z1) {
-    const len = z1 - z0, W = CFG.courseWidth;
-    box(W, 2, len, 0, -1, z0 + len / 2, CC.chase, { studs: true });
-    for (let z = z0 + 30; z < z1 - 10; z += 28) {
-        if (rng() < 0.5) box(12 + rng() * 8, 2.6, 2, (rng() * 2 - 1) * 10, 1.3, z, CC.red);
-        else for (let n = 0; n < 2; n++) box(5, WALLH, 5, (rng() * 2 - 1) * 15, WALLH / 2, z + n * 10, CC.ledge);
+// Stage 6: a long hall; a Megalodon chases you down it
+function buildChase(i, s, rng) {
+    const W = s.w, H = STAGE_H, len = s.cE - s.zS;
+    enclosure(s, brickMaterial(0x5c6c94, s.len / 12, (H + 10) / 6), 0x2a3450, H);
+    ceilingLights(s, H);
+    waterFloor(W, len, 0, s.zS + len / 2);
+    for (let z = s.zS + 30; z < s.cE - 10; z += 28) {
+        if (rng() < 0.5) box(12 + rng() * 8, 2.6, 2, (rng() * 2 - 1) * 10, 1.3, z, 0xe8182c);
+        else for (let n = 0; n < 2; n++) studBox(5, H, 5, (rng() * 2 - 1) * 15, H / 2, z + n * 10, 0x6a78a0);
     }
-    for (let n = 0; n < 9; n++) addPickup(i, (rng() * 2 - 1) * 16, 0, z0 + 20 + (len - 30) * n / 8, s.pickup);
+    for (let n = 0; n < 9; n++) addPickup(i, (rng() * 2 - 1) * 16, 0, s.zS + 20 + (len - 30) * n / 8, s.pickup);
     // The Megalodon that chases this player (local only; each player gets their own)
     const m = new T.Group();
-    const jaws = { ...SHARK_LOOK, size: 7 };
-    const big = buildFish(jaws); m.add(big);
+    const big = buildFish({ ...SHARK_LOOK, size: 7 }); m.add(big);
     for (const sx of [-1, 1]) { const f = buildFish({ ...SHARK_LOOK, size: 4 }); f.position.set(sx * 14, 2, -8); m.add(f); }
     m.visible = false; scene.add(m);
     // Length from the group origin to the Megalodon's nose
     m.userData.nose = (5.4 / 2 + 1.8 + 1) * big.userData.inner.scale.z;
-    const k = aabb(0, WALLH / 2, s.zS - 6, W, WALLH, 4); k.active = false; kills.push(k);
+    const k = aabb(0, H / 2, s.zS - 6, W, H, 4); k.active = false; kills.push(k);
     s.chaseMesh = m; s.chaseKill = k;
-    tickers.push((dt) => { if (m.visible) { swimFish(big, dt, true); m.children.forEach((f) => f !== big && swimFish(f, dt, true)); } });
+    tickers.push((dt) => { if (m.visible) m.children.forEach((f) => swimFish(f, dt, true)); });
 }
 
+const BUILDERS = { Ocean: buildOcean, FallingWalls: buildFallingWalls, Maze: buildMaze, Sharks: buildSharks, Obby: buildObby, Chase: buildChase };
+// Surface of each stage's "Stage N" wall, matching the stage it leads into
+const WALL_LOOK = {
+    FallingWalls: () => studWallMaterial(0x6c6a8a, 20, 13),
+    Maze: () => studWallMaterial(0xd8a820, 20, 13),
+    Sharks: () => studWallMaterial(0xe8c040, 20, 13),
+    Obby: () => studWallMaterial(0x2a6ae8, 20, 13),
+    Chase: () => studWallMaterial(0x8a2030, 20, 13),
+};
+
 function buildCourse() {
-    const W = CFG.courseWidth;
     STAGES.forEach((s, idx) => {
         const rng = rngFrom(100 + idx * 17);
-        const mid = s.zS + s.len / 2;
-        for (const sx of [-1, 1]) {
-            texturedBox(2, 86, s.len, sx * (W / 2 + 1), 3, mid, brickMaterial(CC.wall, s.len / 12, 86 / 6));
-            solids.push(aabb(sx * (W / 2 + 1), 3, mid, 2, 86, s.len));
-            for (let z = s.zS + 20; z < s.zE - 5; z += 40) {
-                box(2.4, WALLH, 2.4, sx * (W / 2 + 0.3), WALLH / 2, z, CC.pillar, { decor: true });
-                box(3, 1.2, 3, sx * (W / 2 + 0.3), WALLH - 0.6, z, 0xc2860a, { decor: true });
-                box(0.4, 2, 5, sx * (W / 2 - 0.1), 20, z + 20, 0xbff6ff, { neon: true, decor: true });
-                const banner = new T.Mesh(new T.PlaneGeometry(5, 12.5), bannerMaterial((z / 40) % 2 ? ['#1ec8b4', '#0a6a7a'] : ['#1e46c8', '#0f2470'], (z / 40) % 2 ? 'SWIM' : 'RUN!'));
-                banner.position.set(sx * (W / 2 - 0.05), 30, z + 10);
-                banner.rotation.y = -sx * Math.PI / 2;
-                scene.add(banner);
-            }
-        }
-        box(W + 4, 2, s.len, 0, WALLH + 1, mid, CC.ceiling, { decor: true });
-        waterFloor(W, 16, 0, s.zS + 8);
-        chevrons(s.zS + 4, 2);
-        const z0 = s.zS + 16, z1 = s.cE;
-        if (s.type === 'LavaPath') buildLavaPath(idx, s, rng, z0, z1);
-        else if (s.type === 'FallingWalls') buildFallingWalls(idx, s, rng, z0, z1);
-        else if (s.type === 'Maze') buildMaze(idx, s, rng, z0, z1);
-        else if (s.type === 'Obby') buildObby(idx, s, rng, z0, z1);
-        else if (s.type === 'Sharks') buildSharks(idx, s, rng, z0, z1);
-        else buildChase(idx, s, rng, z0, z1);
-        box(W, 2, CFG.endZone, 0, -1, s.cE + CFG.endZone / 2, CC.sidewalk, { studs: true });
+        BUILDERS[s.type](idx, s, rng);
         const finish = idx === STAGES.length - 1;
-        returnPad(idx, -10, s.cE + 22, s.wins, finish);
-        doubleWinsPad(10, s.cE + 22);
-        treasureChest(new V3(W / 2 - 5, 0, s.cE + 40), new V3(-1, 0, 0));
-        coral(rng, -W / 2 + 4, s.cE + 40, 1.2);
-        stageSigns(s, idx);
-        stageGate(s, idx);
-        const tr = aabb(0, 20, s.zS + 3, W, 60, 2);
+        landing(idx, s, finish);
+        if (idx === 0) {
+            // Stage 1's title floats in front of the lobby tunnel
+            textPlane([{ t: s.name, c: '#ffffff', s: '#1a1f5c', px: 150 }, { t: s.sub, c: s.subColor, s: '#1a1f5c', px: 110 }], 30, 1024, new V3(0, 20, s.zS - 5), new V3(0, 20, s.zS - 15));
+        } else stageWall(STAGES[idx - 1], s, WALL_LOOK[s.type]());
+        const tr = aabb(0, 20, s.zS + 3, s.w, 60, 2);
         tr.enter = () => actions.enterStage(idx);
         triggers.push(tr);
         if (finish) {
-            texturedBox(W + 4, 90, 2, 0, 2, s.zE + 1, brickMaterial(CC.wall, 4, 15));
-            solids.push(aabb(0, 2, s.zE + 1, W + 4, 90, 2));
+            texturedBox(s.w + 4, 90, 2, 0, 2, s.zE + 1, brickMaterial(0x5c6c94, 4, 15));
+            solids.push(aabb(0, 2, s.zE + 1, s.w + 4, 90, 2));
             textPlane([{ t: 'YOU ESCAPED!', c: '#ffd028', s: '#16121f', px: 150 }, { t: 'More stages coming soon', c: '#ffffff', s: '#16121f', px: 70 }], 34, 1024, new V3(0, 24, s.zE - 0.2), new V3(0, 24, s.zE - 20));
         }
     });
 }
 
-// =====================================================================================
-// Stage gates: sandstone frame with an animated hex force field you swim through
-// =====================================================================================
-const GATE_H = 26;
-const gates = [];
-function stageGate(s, idx) {
-    const W = CFG.courseWidth, z = s.zS + 1, fw = W - 4;
-    for (const sx of [-1, 1]) {
-        box(2, GATE_H + 2, 2.4, sx * (W / 2 - 1), (GATE_H + 2) / 2, z, CC.pillar, { decor: true });
-        box(0.5, GATE_H, 0.6, sx * (fw / 2 + 0.2), GATE_H / 2, z - 1.3, 0xbff6ff, { neon: true, decor: true });
-    }
-    box(W, 2, 2.4, 0, GATE_H + 1, z, CC.pillar, { decor: true });
-    box(fw, 0.5, 0.6, 0, GATE_H - 0.2, z - 1.3, 0xbff6ff, { neon: true, decor: true });
-    const m = new T.ShaderMaterial({
-        uniforms: {
-            uTime: { value: 0 }, uRip: { value: 9 }, uRipC: { value: new T.Vector2(0.5, 0.2) },
-            uColor: { value: new T.Color(s.subColor) }, uAspect: { value: fw / GATE_H }, uFade: { value: 1 },
-        },
-        vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-        fragmentShader: `
-            uniform float uTime, uRip, uAspect, uFade; uniform vec2 uRipC; uniform vec3 uColor; varying vec2 vUv;
-            float hexDist(vec2 p) { p = abs(p); return max(dot(p, normalize(vec2(1.0, 1.7320508))), p.x); }
-            void main() {
-                vec2 uv = vec2(vUv.x * uAspect, vUv.y) * 8.0;
-                vec2 r = vec2(1.0, 1.7320508), h = r * 0.5;
-                vec2 a = mod(uv, r) - h, b = mod(uv - h, r) - h;
-                vec2 gv = dot(a, a) < dot(b, b) ? a : b;
-                vec2 id = uv - gv;
-                float edge = smoothstep(0.40, 0.49, hexDist(gv));
-                float shimmer = pow(0.5 + 0.5 * sin(uTime * 2.2 + id.x * 0.9 + id.y * 1.7), 8.0);
-                float scan = exp(-pow((fract(uTime * 0.28) * 1.4 - 0.2 - vUv.y) * 9.0, 2.0));
-                vec2 d = vec2((vUv.x - uRipC.x) * uAspect, vUv.y - uRipC.y);
-                float ring = exp(-pow(length(d) - uRip * 1.8, 2.0) * 40.0) * clamp(1.0 - uRip / 1.1, 0.0, 1.0);
-                float flash = clamp(1.0 - uRip * 2.5, 0.0, 1.0) * 0.45;
-                float fade = smoothstep(0.0, 0.05, vUv.x) * smoothstep(1.0, 0.95, vUv.x) * (0.55 + 0.45 * (1.0 - vUv.y));
-                float alpha = (0.05 + edge * 0.32 + shimmer * 0.2 + scan * 0.22 + ring * 0.9 + flash) * fade * uFade;
-                vec3 col = uColor * (0.55 + edge * 0.7 + shimmer * 0.5 + ring * 1.2) + vec3(ring * 0.5 + flash);
-                gl_FragColor = vec4(col * alpha, alpha);
-                #include <colorspace_fragment>
-            }`,
-        transparent: true, depthWrite: false, side: T.DoubleSide, blending: T.AdditiveBlending, toneMapped: false,
-    });
-    const field = new T.Mesh(new T.PlaneGeometry(fw, GATE_H), m);
-    field.position.set(0, GATE_H / 2, z);
-    scene.add(field);
-    gates[idx] = { m, fw, z };
-}
-// Ripple from where the player broke through the field
-export function gatePulse(idx, x, y) {
-    const g = gates[idx];
-    if (!g) return;
-    g.m.uniforms.uRip.value = 0;
-    g.m.uniforms.uRipC.value.set(clamp(x / g.fw + 0.5, 0, 1), clamp((y + 2.5) / GATE_H, 0, 1));
-}
-export function updateGates(t, dt) {
-    for (const g of gates) {
-        if (!g) continue;
-        g.m.uniforms.uTime.value = t;
-        g.m.uniforms.uRip.value += dt;
-        // Seen from close behind (just after running through) the field would cover the whole screen
-        const d = Math.abs(camera.position.z - g.z);
-        const behind = camera.position.z > g.z;
-        g.m.uniforms.uFade.value = behind ? Math.min(1, Math.max(0.08, (d - 4) / 34)) : Math.min(1, Math.max(0.15, (d - 3) / 26));
-    }
-}
-
-// Falling rocks run on the server clock so every player sees the same timing.
-// Returns true when a slab crushes the player box at (x, y, z).
+// Stage 2's stone walls run on the server clock so every player sees the same timing.
+// Returns true when a wall crushes the player box at (x, y, z).
 export function updateSlabs(t, hitsPlayer) {
     const F = CFG.fall, cyc = F.raised + F.warn + F.fall + F.down + F.rise;
     let crushed = false;
     for (const s of slabs) {
         const k = ((t + s.phase) % cyc + cyc) % cyc;
-        let bottom = 16, warn = false, crushing = false;
-        if (k < F.raised) bottom = 16;
-        else if (k < F.raised + F.warn) { warn = true; bottom = 16 + Math.sin(k * 60) * 0.25; }
-        else if (k < F.raised + F.warn + F.fall) { crushing = true; bottom = 16 * (1 - (k - F.raised - F.warn) / F.fall); }
+        let bottom = SLAB_RAISE, crushing = false;
+        if (k < F.raised) bottom = SLAB_RAISE;
+        else if (k < F.raised + F.warn) bottom = SLAB_RAISE + Math.sin(k * 60) * 0.3;
+        else if (k < F.raised + F.warn + F.fall) { crushing = true; const f = (k - F.raised - F.warn) / F.fall; bottom = SLAB_RAISE * (1 - f * f); }
         else if (k < F.raised + F.warn + F.fall + F.down) { bottom = 0; crushing = true; }
-        else bottom = 16 * ((k - F.raised - F.warn - F.fall - F.down) / F.rise);
-        s.m.position.set(0, bottom + 15, s.z);
-        s.m.material.color.setHex(warn ? CC.red : CC.falling);
-        s.c.min.y = bottom; s.c.max.y = bottom + 30;
+        else { const f = (k - F.raised - F.warn - F.fall - F.down) / F.rise; bottom = SLAB_RAISE * f * f * (3 - 2 * f); }
+        // Dust puff and a thud the moment a wall lands near the camera
+        const landed = bottom === 0;
+        if (landed && !s.landed && Math.abs(s.z - camera.position.z) < 70) { s.onLand && s.onLand(s); }
+        s.landed = landed;
+        s.m.position.set(0, bottom + SLAB_H / 2, s.z);
+        s.c.min.y = bottom; s.c.max.y = bottom + SLAB_H;
         if (crushing && hitsPlayer && hitsPlayer(s)) crushed = true;
     }
     return crushed;
 }
+// Callback for a wall landing (sound, dust, shake), set by main.js
+export function onSlabLand(fn) { for (const s of slabs) s.onLand = fn; }
 
 export function buildWorld() {
     buildLobby();

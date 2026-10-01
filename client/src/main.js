@@ -1,7 +1,7 @@
 import { Client } from '@colyseus/sdk';
 import {
     T, V3, $, canvas, renderer, scene, camera, sun, solids, kills, triggers, prompts, tickers,
-    billboard, buildRig, ridePose, buildAuraFx, updateAuraFx, seaMine, updateMines, burst, confettiAt,
+    billboard, buildRig, ridePose, buildAuraFx, updateAuraFx, burst, confettiAt,
     floatText, updateEffects, lerpAngle,
 } from './engine.js';
 import { buildFish, swimFish } from './fish.js';
@@ -12,7 +12,7 @@ import { createAvatar, loadBase, packAvatar, unpackAvatar, avatarStats } from '.
 import { updateMaterials } from './textures.js';
 import { pad, pollGamepad, rumble, onGamepadConnection } from './gamepad.js';
 import { render, setSpeedLines, updateFx, dust, sparkleColumn, ring, fireworks, setQuality, bubble } from './fx.js';
-import { buildWorld, SPAWN, pickups, beltTex, refreshShop, renderBoards, treadLocked, updateSlabs, gatePulse, updateGates, updateLobbySigns } from './world.js';
+import { buildWorld, SPAWN, pickups, beltTex, refreshShop, renderBoards, treadLocked, updateSlabs, onSlabLand, updateLobbySigns, slabs } from './world.js';
 import {
     updateHud, toast, levelUp, showStageTitle, buy, showRevive, hideRevive, closeModal, openModal,
     refreshModal, promptEl, promptTxtEl, showGoal, animateCounters,
@@ -163,67 +163,38 @@ function teleport(pos, yaw) {
 }
 function teleportLobby() { P.stage = -1; teleport(SPAWN, 0); }
 
+// Dying bursts the rider and sends them back to the lobby; for a while a
+// "Revive to Stage N" button can put them back at the start of that stage.
+let reviveStage = -1;
+let deaths = 0;
 function die() {
     if (P.dead || P.shield > 0) return;
-    P.dead = true;
+    P.dead = true; deaths++;
     burst(P.pos.clone().add(new V3(0, 2.5, 0)), 0x28c8ff);
     sfx('death'); addShake(0.9); rumble(1, 400);
     resetChase();
     sendMove(true);
-    showRevive();
+    const stage = P.stage;
+    setTimeout(() => {
+        P.dead = false;
+        teleportLobby();
+        reviveStage = stage;
+        if (stage >= 0) showRevive(stage);
+    }, 1200);
 }
-actions.revive = (atSpot) => {
+actions.revive = () => {
     hideRevive();
-    if (!P.dead) return;
-    P.dead = false;
-    if (atSpot) {
-        teleport(P.lastSafe.clone(), P.facing);
-        P.shield = CFG.shieldTime;
-        const s = STAGES[P.stage];
-        if (s && s.type === 'Chase') startChase(P.stage);
-    } else teleportLobby();
+    const idx = reviveStage;
+    reviveStage = -1;
+    if (idx < 0 || !STAGES[idx]) return;
+    teleport(new V3(0, 0.5, STAGES[idx].zS + 8), 0);
+    P.shield = CFG.shieldTime;
+    actions.enterStage(idx);
 };
 
 // =====================================================================================
-// Stage runtime: sea mines and sharks (server timeline), Megalodon chase (local)
+// Stage runtime: sharks (server timeline), Megalodon chase (local)
 // =====================================================================================
-const balls = [];
-function spawnBall(m) {
-    const s = STAGES[m.s];
-    if (!s) return;
-    const r = m.d / 2;
-    balls.push({ m: seaMine(m.d), r, x: m.x, y: r, s, t0: m.t });
-}
-function updateBalls() {
-    const now = net.now();
-    for (let i = balls.length - 1; i >= 0; i--) {
-        const b = balls[i];
-        const age = (now - b.t0) / 1000;
-        const z = b.s.cE - 4 - b.s.bs * Math.max(0, age);
-        b.m.position.set(b.x, b.y, z);
-        b.m.rotation.x = -(b.s.bs * age) / b.r;
-        if (age > CFG.ballLifetime || z < b.s.zS + 10) { scene.remove(b.m); balls.splice(i, 1); continue; }
-        // Sand kicked up behind rolling mines near the camera
-        const wall = performance.now();
-        if (wall > (b.dustT || 0) && Math.abs(z - camera.position.z) < 90) {
-            b.dustT = wall + 110;
-            dust(new V3(b.x + (Math.random() - 0.5) * b.r, 0, z + b.r * 0.7), 1, 0.9);
-        }
-        // A near miss rumbles the camera once
-        if (!b.passed && Math.abs(z - P.pos.z) < 2 && Math.abs(b.x - P.pos.x) < b.r + 5 && !P.dead) { b.passed = true; addShake(0.18); }
-        if (P.dead || P.shield > 0) continue;
-        const cx = clamp(b.x, P.pos.x - HW, P.pos.x + HW), cy = clamp(b.y, P.pos.y, P.pos.y + PH), cz = clamp(z, P.pos.z - HW, P.pos.z + HW);
-        const dx = cx - b.x, dy = cy - b.y, dz = cz - z;
-        if (dx * dx + dy * dy + dz * dz < b.r * b.r) {
-            let sx = P.pos.x - b.x; if (Math.abs(sx) < 0.5) sx = Math.random() < 0.5 ? -1 : 1;
-            P.push.copy(new V3(Math.sign(sx) * 0.55, 0, -1).normalize().multiplyScalar(CFG.ballKnockback));
-            P.vel.y = 38; P.onGround = false;
-            P.shield = 0.35;
-            sfx('hit'); addShake(0.7); rumble(0.8, 250);
-        }
-    }
-}
-
 // Sharks swim across the lane; touching one is a KO. The top of a jump clears them.
 const sharks = [];
 const HAZARD_SHARK = { ...SHARK_LOOK, size: 1.45 };
@@ -236,9 +207,9 @@ function spawnShark(m) {
     sharks.push({ f, s, z: m.z, dir: m.dir, t0: m.t });
 }
 function updateSharks(dt) {
-    const now = net.now(), half = CFG.courseWidth / 2 + 14;
+    const now = net.now();
     for (let i = sharks.length - 1; i >= 0; i--) {
-        const k = sharks[i];
+        const k = sharks[i], half = k.s.w / 2 + 14;
         const age = (now - k.t0) / 1000;
         const x = -k.dir * half + k.dir * k.s.bs * age;
         k.f.position.set(x, 0.4, k.z);
@@ -248,6 +219,18 @@ function updateSharks(dt) {
         // Body from tail to nose along x, a little narrower and lower than the model
         const cx = x + k.dir * 1.5;
         if (Math.abs(P.pos.x - cx) < 9 + HW && Math.abs(P.pos.z - k.z) < 2.2 + HW && P.pos.y < 4.6 && P.pos.y + PH > 0.8) { sfx('chomp'); die(); }
+    }
+}
+
+// Small bubbles keep rising around the player, like the reference's underwater shimmer
+let bubbleAcc = 0;
+const bubbleAt = new V3();
+function ambientBubbles(dt) {
+    bubbleAcc += dt * 7;
+    while (bubbleAcc > 1) {
+        bubbleAcc -= 1;
+        bubbleAt.set(P.pos.x + (Math.random() * 2 - 1) * 20, P.pos.y + Math.random() * 8, P.pos.z + (Math.random() * 2 - 1) * 20);
+        bubble(bubbleAt, 0xe6f8ff);
     }
 }
 
@@ -282,11 +265,9 @@ actions.enterStage = (idx) => {
     const s = STAGES[idx];
     showStageTitle(s);
     sfx('whoosh'); sfx('gate');
-    gatePulse(idx, P.pos.x, P.pos.y);
     baseFov += reduceMotion ? 0 : 14;
     const fl = $('#flash'); fl.classList.remove('show', 'gate'); void fl.offsetWidth; fl.classList.add('show', 'gate');
     if (s.type === 'Chase') startChase(idx); else resetChase();
-    if (S.level < s.rec && S.rebirths === 0) toast('Recommended Level ' + s.rec + '!', '#ffb51c');
 };
 actions.pad = (idx) => {
     sendMove(true);
@@ -457,13 +438,12 @@ async function connect(name) {
         confettiAt(P.pos.clone().add(new V3(0, 4, 0)));
         fireworks(P.pos, 6, () => sfx('firework'));
     });
-    room.onMessage('revived', () => actions.revive(true));
+    room.onMessage('revived', () => actions.revive());
     room.onMessage('fx', () => {
         confettiAt(P.pos.clone().add(new V3(0, 4, 0)));
         sparkleColumn(P.pos, 0xffd028);
         sfx('buy');
     });
-    room.onMessage('ball', spawnBall);
     room.onMessage('shark', spawnShark);
     room.onMessage('boards', renderBoards);
     room.onLeave((code, reason) => {
@@ -636,12 +616,11 @@ function focusStep(container, dir) {
 function padButtons() {
     const p = pad.pressed;
     if (!p.size) return;
-    const overlay = ['#start', '#offline', '#buy', '#revive', '#modal'].find(shown);
+    const overlay = ['#start', '#offline', '#buy', '#modal'].find(shown);
     if (overlay) pad.jump = false;
     if (overlay === '#start') { if ((p.has('A') || p.has('START')) && shown('#playBtn')) play(); return; }
     if (overlay === '#offline') { if (p.has('A')) $('#reconnectBtn').click(); return; }
     if (overlay === '#buy') { if (p.has('A')) $('#buyOk').click(); else if (p.has('B')) $('#buyCancel').click(); return; }
-    if (overlay === '#revive') { if (p.has('A')) $('#reviveYes').click(); else if (p.has('B')) $('#reviveNo').click(); return; }
     if (overlay === '#modal') {
         const body = $('#modal');
         const el = document.activeElement;
@@ -658,7 +637,7 @@ function padButtons() {
         return;
     }
     if (!running) return;
-    if (p.has('X')) usePrompt();
+    if (p.has('X')) { if (shown('#revive') && !activePrompt) $('#revive').click(); else usePrompt(); }
     if (p.has('Y')) openModal('store');
     if (p.has('LB')) openModal('rebirth');
     if (p.has('RB')) openModal('auras');
@@ -785,13 +764,11 @@ function update(dt) {
     const crushed = updateSlabs(net.now() / 1000, (s) => !P.dead && Math.abs(P.pos.z - s.z) < 5 && overlapsBox(s.c, P.pos.x, P.pos.y, P.pos.z));
     if (crushed) { P.shield = 0; die(); }
     updateChase(dt);
-    updateBalls();
     updateSharks(dt);
-    updateMines(t);
+    ambientBubbles(dt);
     updateEffects(dt);
     updateFx(dt);
     updateMaterials(dt);
-    updateGates(t, dt);
     for (const fn of tickers) fn(dt, t);
     beltTex.offset.x = (beltTex.offset.x + dt * 0.75) % 1;
     for (const p of pickups) {
@@ -935,7 +912,7 @@ function wirePortalSettings() {
 }
 function wirePortalEvents() {
     BX.onPortalEvent((event, data) => {
-        if (event === 'respawn_request') { if (P.dead) actions.revive(false); else if (running) teleportLobby(); }
+        if (event === 'respawn_request') { if (running && !P.dead) teleportLobby(); }
         else if (event === 'chat_message_sent' && data) net.send('chat', { text: String(data) });
         else if (event === 'play_emote' && data) { playEmoteOn(localAvatar, String(data)); net.send('emote', { id: String(data) }); }
     });
@@ -962,6 +939,13 @@ async function boot() {
     try { await Promise.race([document.fonts.load('700 40px Fredoka'), new Promise((r) => setTimeout(r, 2500))]); } catch (e) { /* fallback font */ }
     BX.loadingStep('Filling the ocean…');
     buildWorld();
+    onSlabLand((s) => {
+        const d = Math.abs(s.z - P.pos.z);
+        if (!running || P.pos.z < STAGES[0].zS) return;
+        sfx('land');
+        if (d < 30) addShake(0.45 * (1 - d / 30));
+        for (const x of [-10, 0, 10]) dust(new V3(x, 0, s.z + 5), 3, 1.2);
+    });
     loadBase().catch(() => {}); // warm up the Bloxity body model
     wirePortalSettings();
     wirePortalEvents();
@@ -986,11 +970,11 @@ boot();
 if (import.meta.env.DEV) {
     window.__qa = {
         P, S, STAGES, avatarStats, scene,
-        showcaseMine: (d, dx, dy, dz) => { const m = seaMine(d); m.position.set(P.pos.x + dx, P.pos.y + dy, P.pos.z + dz); return true; },
         teleport: (x, y, z) => teleport(new V3(x, y, z), 0),
         enter: (i) => actions.enterStage(i),
-        hazards: () => ({ sharks: sharks.map((k) => [Math.round(k.f.position.x), Math.round(k.z)]), balls: balls.length, chase: chase.active ? chase.z : null }),
+        hazards: () => ({ sharks: sharks.map((k) => [Math.round(k.f.position.x), Math.round(k.z)]), chase: chase.active ? chase.z : null }),
         buildFish, fishById, spawnShark, net, buy,
+        slabs: () => slabs.map((s) => [Math.round(s.z), +s.c.min.y.toFixed(1)]), deaths: () => deaths,
         look: (yaw, pitch, dist) => { cam.yaw = yaw; cam.pitch = pitch; cam.dist = dist; },
         state: () => ({ x: P.pos.x, y: P.pos.y, z: P.pos.z, dead: P.dead, stage: P.stage, wins: S.wins, level: S.level, speed: S.speed, aura: S.aura, equipped: S.equipped, rebirths: S.rebirths }),
     };

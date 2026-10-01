@@ -13,12 +13,11 @@ export const CFG = {
     courseWidth: 44,
     wallHeight: 46,
     voidY: -40,
-    endZone: 50,
+    endZone: 36,
     pickupRespawn: 10,
-    ballLifetime: 16,
-    ballKnockback: 70,
     sharkLifetime: 6,
-    fall: { raised: 2.5, warn: 0.8, fall: 0.25, down: 1.5, rise: 0.6 },
+    // Stage 2 stone walls: seconds up, shaking, dropping, down, rising (reference: ~4 s down)
+    fall: { raised: 3, warn: 0.6, fall: 0.5, down: 3.5, rise: 1.6 },
     boostMult: 2,
     boostMinutes: 15,
     reviveTimeout: 10,
@@ -34,15 +33,16 @@ export const maxSpeedFor = (L, R) => Math.max(CFG.minWalk, 12 + 2 * L + 20 * (R 
 
 export const LOBBY = { halfX: 85, halfZ: 70, lower: 30, wallHeight: 46, spawn: { x: -2, y: 0.5, z: 0 } };
 
-// bi = seconds between hazards, bs = hazard speed. Balls are rolling sea mines,
-// sharks cross the lane sideways, the Chase stage sends a Megalodon after you.
+// Stages 1-4 follow reference/game satges.mp4; 5 and 6 are our own, in the same style.
+// w = stage width, door = opening in the "Stage N" wall at its start.
+// Sharks: bi = seconds between sharks, bs = their swim speed.
 export const STAGES = [
-    { name: 'Stage 1', sub: 'ESCAPE THE OCEAN', subColor: '#28e0ff', type: 'LavaPath', len: 420, pw: 20, pickup: 5, wins: 1, rec: 1, bi: 4, bs: 34 },
-    { name: 'Stage 2', sub: 'Crushing Rocks', subColor: '#ff5a1e', type: 'FallingWalls', len: 420, pickup: 5, wins: 3, rec: 5, bi: 5, bs: 38 },
-    { name: 'Stage 3', sub: 'Golden Maze', subColor: '#ffd028', type: 'Maze', len: 440, pickup: 9, wins: 8, rec: 9, bi: 6, bs: 40 },
-    { name: 'Stage 4', sub: 'Coral Obby', subColor: '#ff6ec7', type: 'Obby', len: 440, pickup: 9, wins: 20, rec: 13, bi: 6, bs: 40 },
-    { name: 'Stage 5', sub: 'SHARK ATTACK', subColor: '#6fe0ff', type: 'Sharks', len: 460, pickup: 12, wins: 50, rec: 17, bi: 1.3, bs: 34 },
-    { name: 'Stage 6', sub: 'MEGALODON!', subColor: '#ff3c50', type: 'Chase', len: 480, chaseSpeed: 50, chaseWait: 4, pickup: 15, wins: 100, rec: 21, bi: 4, bs: 42 },
+    { name: 'Stage 1', sub: 'ESCAPE THE OCEAN', subColor: '#28e0ff', type: 'Ocean', len: 230, w: 40, door: 40, pickup: 1, wins: 1 },
+    { name: 'Stage 2', sub: '', type: 'FallingWalls', len: 300, w: 30, door: 30, pickup: 1, wins: 3 },
+    { name: 'Stage 3', sub: '', type: 'Maze', len: 300, w: 64, door: 16, pickup: 1, wins: 8 },
+    { name: 'Stage 4', sub: '', type: 'Sharks', len: 320, w: 44, door: 26, pickup: 1, wins: 20, bi: 1.2, bs: 30 },
+    { name: 'Stage 5', sub: 'Coral Obby', subColor: '#ff6ec7', type: 'Obby', len: 360, w: 44, door: 24, pickup: 1, wins: 50 },
+    { name: 'Stage 6', sub: 'MEGALODON!', subColor: '#ff3c50', type: 'Chase', len: 420, w: 44, door: 30, chaseSpeed: 50, chaseWait: 4, pickup: 1, wins: 100 },
 ];
 {
     let z = 70;
@@ -50,8 +50,6 @@ export const STAGES = [
         s.zS = z;
         s.zE = z + s.len;
         s.cE = s.zE - CFG.endZone;
-        // Stages whose floor is a continuous lane get rolling sea mines
-        s.ballLane = s.type === 'LavaPath' ? s.pw / 2 : s.type === 'FallingWalls' ? CFG.courseWidth / 2 - 1 : 0;
         z = s.zE;
     }
 }
