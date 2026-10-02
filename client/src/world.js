@@ -672,9 +672,11 @@ function buildFallingWalls(i, s, rng) {
     let z = s.zS + 20, k = 0;
     while (z + RED_LEN + WATER_LEN <= s.cE) {
         studBox(W, 2, RED_LEN, 0, -1, z + RED_LEN / 2, 0xe8182c);
+        // A wall lands here, so it is never a revive spot
+        solids[solids.length - 1].unsafe = true;
         const m = new T.Mesh(UNIT, crackedStoneMaterial(W / 4, SLAB_H / 4));
         m.scale.set(W, SLAB_H, RED_LEN); m.castShadow = true; scene.add(m);
-        const c = aabb(0, SLAB_RAISE + SLAB_H / 2, z + RED_LEN / 2, W, SLAB_H, RED_LEN); solids.push(c);
+        const c = aabb(0, SLAB_RAISE + SLAB_H / 2, z + RED_LEN / 2, W, SLAB_H, RED_LEN); c.unsafe = true; solids.push(c);
         slabs.push({ m, c, z: z + RED_LEN / 2, phase: k * 1.7 });
         waterFloor(W, WATER_LEN, 0, z + RED_LEN + WATER_LEN / 2);
         if (k % 2 === 0) addPickup(i, (rng() * 2 - 1) * (W / 2 - 4), 0, z + RED_LEN + WATER_LEN / 2, s.pickup);
@@ -789,8 +791,10 @@ function buildObby(i, s, rng) {
         const sx = beam ? 3 : 6 + rng() * 4, sz = beam ? 12 : 6 + rng() * 4;
         const nz = z + gap;
         if (nz + sz > z1 - 12) break;
-        x = clamp(x + (rng() * 2 - 1) * 5, -(W / 2 - 8), W / 2 - 8);
-        y = clamp(y + [0, 0, 2, -2, 3, -3][Math.floor(rng() * 6)], 0, 9);
+        // Keep every jump makeable at the starting walk speed (about 7 studs of air at +2 height)
+        x = clamp(x + (rng() * 2 - 1) * 3.5, -(W / 2 - 8), W / 2 - 8);
+        const rise = [0, 0, 2, -2, 3, -3][Math.floor(rng() * 6)];
+        y = clamp(y + (gap > 5 ? Math.min(rise, 2) : rise), 0, 9);
         box(sx, 2, sz, x, y - 1, nz + sz / 2, CORAL[k % 4], { studs: true });
         tops.push({ x, y, z: nz + sz / 2 });
         z = nz + sz; k++;

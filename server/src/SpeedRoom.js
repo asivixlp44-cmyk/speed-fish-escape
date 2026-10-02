@@ -1,6 +1,7 @@
 import { Room } from 'colyseus';
 import { GameState, PlayerState } from './schema.js';
-import { getProfile, markDirty, allProfiles, saveProfiles, adoptGuestProgress } from './profiles.js';
+import { getProfile, hasProfile, markDirty, allProfiles, saveProfiles, adoptGuestProgress } from './profiles.js';
+import { sealProfile, openSave } from './saves.js';
 import { verifyBloxityToken, BUX_MODE } from './bloxity.js';
 import {
     CFG, LOBBY, STAGES, PRODUCTS, PASSES, FISH, fishById, AURAS, auraById, FREE, DAILY, KITS, SKINS,
@@ -71,7 +72,10 @@ export class SpeedRoom extends Room {
             name = cleanName(auth.legion.name) || name;
             adoptGuestProgress(uid, guest, name);
         }
+        // A fresh server (restart on a temporary disk) restores the browser's signed backup
+        const restore = !hasProfile(uid) && openSave(options.save, [uid, guest]);
         const profile = getProfile(uid, name, randomName());
+        if (restore) { Object.assign(profile, restore); markDirty(); }
         const player = new PlayerState();
         player.name = profile.name;
         player.av = cleanAvatar(options.av);
@@ -83,7 +87,7 @@ export class SpeedRoom extends Room {
         this.sessions.set(client.sessionId, {
             client, profile, player,
             moving: false, lastMove: 0, gainT: 0,
-            joinedAt: Date.now(), freeClaimed: {}, cooldowns: new Map(), guest, lastChat: 0,
+            joinedAt: Date.now(), freeClaimed: {}, cooldowns: new Map(), guest, lastChat: 0, padArmed: true,
         });
         this.syncPublic(client.sessionId);
         client.send('hello', { now: Date.now(), bux: BUX_MODE, bloxity: uid.startsWith('legion_') });
@@ -115,7 +119,7 @@ export class SpeedRoom extends Room {
             owned: p.owned, equipped: p.equipped, auras: p.auras, aura: p.aura, passes: p.passes,
             boostUntil: p.boostUntil, customSpeed: p.customSpeed, claimedPack: p.claimedPack,
             firstPlay: p.firstPlay, freeClaimed: s.freeClaimed, joinedAt: s.joinedAt, daily: p.daily,
-            chestAt: p.chestAt, freeBoost: !!s.freeBoost,
+            chestAt: p.chestAt, freeBoost: !!s.freeBoost, save: sealProfile(p),
         });
     }
     toast(s, text, color) { s.client.send('toast', { text, color }); }
@@ -194,14 +198,19 @@ export class SpeedRoom extends Room {
         pl.anim = clamp(m.a | 0, 0, 3);
         s.moving = !!m.mv;
         s.lastMove = Date.now();
+        if (pl.z < STAGES[0].zS - 2) s.padArmed = true;
     }
 
     onPickup(client, m) {
         const s = this.sessions.get(client.sessionId);
         if (!s || !m) return;
-        const st = STAGES[m.s | 0];
-        if (!st || stageAt(s.player.z) !== (m.s | 0)) return;
-        if (!this.cooldown(s, 'pickup:' + String(m.id).slice(0, 16), CFG.pickupRespawn - 0.5)) return;
+        const idx = m.s | 0, st = STAGES[idx];
+        if (!st || stageAt(s.player.z) !== idx) return;
+        // Ids are 'stage:n' as built by world.js; anything else could farm endless cooldown keys
+        const id = String(m.id);
+        const mt = /^(\d+):(\d{1,2})$/.exec(id);
+        if (!mt || (mt[1] | 0) !== idx || (mt[2] | 0) >= CFG.maxPickupsPerStage) return;
+        if (!this.cooldown(s, 'pickup:' + id, CFG.pickupRespawn - 0.5)) return;
         const got = this.addSpeed(s, st.pickup, true);
         this.syncPublic(client.sessionId);
         client.send('gain', { n: got, pickup: 1 });
@@ -213,7 +222,9 @@ export class SpeedRoom extends Room {
         if (!s || !st) return;
         const z = s.player.z;
         if (z < st.cE - 5 || z > st.zE + 5) return;
-        if (!this.cooldown(s, 'pad', 2)) return;
+        // One claim per run: the pad is re-armed once the player is back in the lobby
+        if (!s.padArmed || !this.cooldown(s, 'pad', 2)) return;
+        s.padArmed = false;
         const got = this.addWins(s, st.wins, true);
         this.syncPublic(client.sessionId);
         client.send('wins', { n: got });

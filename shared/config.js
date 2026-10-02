@@ -15,6 +15,7 @@ export const CFG = {
     voidY: -40,
     endZone: 36,
     pickupRespawn: 10,
+    maxPickupsPerStage: 40,
     // Stage 2 stone walls: seconds up, shaking, dropping, down, rising
     fall: { raised: 2.2, warn: 0.45, fall: 0.35, down: 2.6, rise: 1.1 },
     boostMult: 2,

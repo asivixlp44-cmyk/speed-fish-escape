@@ -407,6 +407,7 @@ async function connect(name) {
     const id = BX.identity();
     const room = await client.joinOrCreate('speed', {
         uid: playerUid(), name: name || id.name, token: id.token, av: packAvatar(BX.currentAvatar()),
+        save: storageGet('sfe_save') || '',
     });
     net.room = room;
     joinSynced = false;
@@ -420,6 +421,9 @@ async function connect(name) {
     BX.updateRoom(room.roomId);
     BX.gameplayStart();
     room.onMessage('profile', (m) => {
+        // Signed backup of this player's progress, handed back if the server restarts
+        if (m.save) storageSet('sfe_save', m.save);
+        delete m.save;
         Object.assign(S, m);
         refreshShop(); refreshModal();
         if (rig) setMount(rig, S.equipped, headLabel);
@@ -736,7 +740,7 @@ function update(dt) {
             if (k.max.x > P.pos.x - HW + 0.2 && k.min.x < P.pos.x + HW - 0.2 && k.max.y > P.pos.y + 0.1 && k.min.y < P.pos.y + PH && k.max.z > P.pos.z - HW + 0.2 && k.min.z < P.pos.z + HW - 0.2) { die(); break; }
         }
         P.safeTimer -= dt;
-        if (P.onGround && P.safeTimer <= 0 && !(P.ground && P.ground.belt)) { P.lastSafe.copy(P.pos); P.safeTimer = 0.3; }
+        if (P.onGround && P.safeTimer <= 0 && !(P.ground && (P.ground.belt || P.ground.unsafe))) { P.lastSafe.copy(P.pos); P.safeTimer = 0.3; }
 
         for (const tr of triggers) {
             const inside = overlapsBox(tr, P.pos.x, P.pos.y, P.pos.z);

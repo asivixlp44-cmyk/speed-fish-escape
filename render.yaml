@@ -13,3 +13,6 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "22"
+      # Signs the progress backups kept in players' browsers (see server/src/saves.js)
+      - key: SAVE_SECRET
+        generateValue: true

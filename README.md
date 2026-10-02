@@ -65,6 +65,8 @@ Phones get an on-screen joystick.
 - **Server-side:** everything that changes progress: Speed from swimming (including treadmills and the fish bonus), pickups, Wins pads, fish unlocks, auras, rebirths, FREE and Daily rewards, and purchases.
 - The sharks and the falling stone walls run on the server clock, so all players see the same timing. Each player's Megalodon is local.
 - Progress is saved per browser (a random id in localStorage) or per Bloxity account, in `server/data/profiles.json`. Set `DATA_DIR` to change the folder.
+- Hosts with a temporary disk (Render's free tier) lose that file on every restart. To survive this, each player's browser also keeps a signed backup of their progress (`server/src/saves.js`). When a restarted server meets a player it doesn't know, it restores that backup. The backup is signed with `SAVE_SECRET` (the Render blueprint generates one), so edited backups are refused.
+- The server validates pickup ids, and a stage's Wins pad pays once per run (re-armed when you return to the lobby).
 
 ## Bloxity
 
