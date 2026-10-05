@@ -33,9 +33,9 @@ For development, run `npm run dev:server` and `npm run dev:client` in two termin
   - Left: the **FISH** shop. The low front row has Clownfish, Pufferfish, Red Snapper, Lionfish, Piranha ("Cheap Fish", 9 Bux) and OP Serpent (Bux). Stairs lead up to the raised back row: Blue Marlin, Orca, Whale Shark, Great White, Leviathan, Abyss King and Blood Jaws. Walk onto a fish's yellow pad to unlock or ride it.
   - Right: **AUTO-TRAIN** treadmills (X25 and X9 are passes, X3, four x1), the "Keep playing" hut (a free x2 Speed Boost after 15 minutes), the Group Chest (free Speed and Wins once a day), the +150/Speed Sea Turtle (free after 20 minutes), +500 / +5K Wins pads, and the Most Speed / Most Wins stone boards.
 - **Course**, six stages. Stages 1-4 follow `reference/game satges.mp4`; 5 and 6 are our own in the same style. Each stage starts behind a big "Stage N" wall:
-  1. ESCAPE THE OCEAN: narrow water slabs stepping up and down over a lava pit, with jumps between some of them and ice spikes on others. Lava columns and hanging rocks.
+  1. ESCAPE THE OCEAN: narrow water slabs stepping up and down over a lava pit, with jumps over the lava between some of them. Spikes poke out of the lava beside the slabs; lava columns and hanging rocks.
   2. An open bridge over a lava sea between Atlantis terraces. Grey cracked stone walls hang over the red strips and slam down every few seconds; standing under one is a KO.
-  3. A maze of tall gold walls on a water floor, with dead ends and ice spike traps, under a dark ceiling with lights.
+  3. A maze of tall gold walls on a water floor, with dead ends, under a dark ceiling with lights.
   4. A brick hall with sea grass and crystals. Shark lanes every 20 studs: sharks swim back and forth across the hall on the server clock (two per lane in every third lane). Touching one is a KO; the top of a jump clears them.
   5. Coral Obby: coral platforms over lava.
   6. MEGALODON!: a giant Megalodon chases you down the hall. It races in when far behind, then creeps up a little faster than you walk, with a red screen edge and a distance warning. Sprint to stay ahead; bump into too many obstacles and it catches you.

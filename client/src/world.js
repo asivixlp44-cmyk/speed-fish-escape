@@ -524,12 +524,6 @@ function cone(x, y, z, r, h, color) {
     scene.add(m);
     return m;
 }
-// Ice-crystal spike standing on a walkway (top at y + 3): jump it or go round, touching it is a KO
-function iceSpike(x, y, z) {
-    cone(x, y, z, 1, 3.2, 0x6fe8ff);
-    cone(x + 0.9, y, z + 0.5, 0.5, 1.8, 0xbff6ff);
-    const k = aabb(x, y + 1.3, z, 1.6, 2.6, 1.6); k.active = true; kills.push(k);
-}
 // Pink sneaker worth +Speed, with its "+1 Speed" label floating underneath
 function addPickup(stageIdx, x, y, z, amount) {
     const g = new T.Group();
@@ -641,12 +635,11 @@ function buildOcean(i, s, rng) {
         const y = [0, 1.5, 3, 1.5][k % 4];
         waterFloor(pw, len, x, z + len / 2, y, y + 7);
         tops.push({ x, y, z: z + len / 2, pw });
-        // Spikes poking up out of the lava beside the slab
+        // Spikes poking up out of the lava beside the slab, kept clear of its edge
         for (const sd of [-1, 1]) if (rng() < 0.7) {
-            const cx = x + sd * (pw / 2 + 1.5 + rng() * 3);
+            const cx = x + sd * (pw / 2 + 3.5 + rng() * 3);
             cone(cx, -6, z + rng() * len, 1.1, 7 + rng() * 3, rng() < 0.5 ? 0x6fe8ff : 0x6a6e80);
         }
-        if (k > 0 && k % 2 === 0 && len > 12) iceSpike(x + (rng() * 2 - 1) * (pw / 2 - 2), y, z + len / 2);
         // Every other slab ends in a jump over the lava
         z += len + (k % 2 && z + len < z1 - 20 ? 2.5 + rng() * 2 : 0); k++;
     }
@@ -721,8 +714,6 @@ function buildMaze(i, s, rng) {
         if (north[r][c] && !(r === ROWS - 1 && c === mid)) wall(C + 1.5, 1.5, x0 + c * C + C / 2, cz + C);
         if (east[r][c] && c < COLS - 1) wall(1.5, C + 1.5, x0 + (c + 1) * C, cz + C / 2);
     }
-    // Ice spike traps in some corridors
-    for (let r = 1; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (rng() < 0.16) iceSpike(x0 + c * C + C / 2 + (rng() - 0.5) * 4, 0, mz + r * C + C / 2 + (rng() - 0.5) * 4);
     for (let n = 0; n < 12; n++) {
         const r = Math.floor(rng() * ROWS), c = Math.floor(rng() * COLS);
         addPickup(i, x0 + c * C + C / 2, 0, mz + r * C + C / 2, s.pickup);
