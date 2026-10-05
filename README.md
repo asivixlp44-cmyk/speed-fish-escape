@@ -77,18 +77,18 @@ Phones get an on-screen joystick.
 
 ## Deploy (Bloxity hosting)
 
-Every push to  (prod) or  runs :
+Every push to `main` (prod) or `dev` runs `.github/workflows/deploy.yml`:
 
-1. Builds the server image from  and pushes it to .
-2. Tells Legion () to roll it out (seat cap 24, up to 5 replicas).
-3. Builds the client with  and uploads it to the Bloxity hosting API.
+1. Builds the server image from `server/Dockerfile` and pushes it to `ghcr.io/asivixlp44-cmyk/speed-fish-escape-server`.
+2. Tells Legion (`legion.bloxity.io/v1/apps/speed-fish-escape/deploy`) to roll it out (seat cap 24, up to 5 replicas).
+3. Builds the client with `VITE_BLOXITY_GAME_ID` and uploads it to the Bloxity hosting API.
 
 Play at https://speed-fish-escape.play.bloxity.io (prod) or https://speed-fish-escape.dev.play.bloxity.io (dev).
-The hosted client finds its server through the Bloxity matchmaker ().
+The hosted client finds its server through the Bloxity matchmaker (`<id>.host.bloxity.io`).
 
 One-time setup:
 
-- Create the app  on hosting.bloxity.io (Legion has no create-on-deploy).
-- Repo secret:  (from hosting.bloxity.io). The image is pushed with the workflow's own ; a  PAT is optional.
+- Create the app `speed-fish-escape` on hosting.bloxity.io (Legion has no create-on-deploy).
+- Repo secret: `LEGION_DEPLOY_TOKEN` (from hosting.bloxity.io). The image is pushed with the workflow's own `GITHUB_TOKEN`; a `GHCR_PUSH_TOKEN` PAT is optional.
 - After the first run, make the GHCR package public so Legion can pull it.
-- On Legion,  is provided: player profiles live in MongoDB and are shared by every pod. Without it (local dev) they are kept in , and each browser keeps a signed backup (, key ) that a restarted server restores.
+- On Legion, `MONGODB_URI` is provided: player profiles live in MongoDB and are shared by every pod. Without it (local dev) they are kept in `server/data/profiles.json`, and each browser keeps a signed backup (`server/src/saves.js`, key `SAVE_SECRET`) that a restarted server restores.
