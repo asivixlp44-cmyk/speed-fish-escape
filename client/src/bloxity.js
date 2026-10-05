@@ -5,7 +5,7 @@
 
 import { SKUS, PRODUCTS, PASSES } from '../../shared/config.js';
 
-export const GAME_SLUG = 'speed-fish-escape';
+export const GAME_SLUG = import.meta.env.VITE_BLOXITY_GAME_SLUG || import.meta.env.VITE_BLOXITY_GAME_ID || 'speed-fish-escape';
 
 const sdk = () => (window.Legion && window.Legion.SDK) || null;
 const has = (path) => {
@@ -85,6 +85,24 @@ export const loadingStep = (text) => call('game.loadingStep', text);
 export const loadingEnd = () => call('game.loadingEnd');
 export const gameplayStart = () => call('game.gameplayStart');
 export const updateRoom = (roomId) => call('game.updateRoom', roomId || '');
+
+// ----- multiplayer matchmaker (Bloxity hosting) -----
+// Resolves { endpoint, roomId, cold }, or null when the SDK/matchmaker isn't reachable
+export async function resolveEndpoint(gameId, version) {
+    if (!has('net.resolveEndpoint')) return null;
+    try {
+        const u = bloxity.user;
+        const opts = {};
+        if (u) opts.userId = u._id;
+        if (version) opts.version = version;
+        const r = (await call('net.resolveEndpoint', gameId, opts)) || null;
+        console.info('[Bloxity] matchmaker', JSON.stringify(r));
+        return r;
+    } catch (e) {
+        console.warn('[Bloxity] matchmaker', e);
+        return null;
+    }
+}
 export const playerJoined = (name) => call('game.playerJoined', name);
 export const playerInRoom = (name) => call('game.playerInRoom', name);
 

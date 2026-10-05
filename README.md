@@ -75,11 +75,20 @@ Phones get an on-screen joystick.
 - Set `LEGION_WEBHOOK_SECRET` on the server to switch to Bux mode; `POST /api/legion-webhook` then grants purchases.
 - The top-left of the screen is left empty for the Bloxity overlay, and there is no start menu.
 
-## Deploy
+## Deploy (Bloxity hosting)
 
-The server also serves the built client, so one Node host runs the whole game (Render, Railway, Colyseus Cloud or any VPS):
+Every push to  (prod) or  runs :
 
-- Build command: `npm install && npm run build`
-- Start command: `npm start` (it listens on `PORT`)
+1. Builds the server image from  and pushes it to .
+2. Tells Legion () to roll it out (seat cap 24, up to 5 replicas).
+3. Builds the client with  and uploads it to the Bloxity hosting API.
 
-WebSockets must be allowed. On hosts with a temporary disk, point `DATA_DIR` at a persistent volume, or player progress resets on redeploy.
+Play at https://speed-fish-escape.play.bloxity.io (prod) or https://speed-fish-escape.dev.play.bloxity.io (dev).
+The hosted client finds its server through the Bloxity matchmaker ().
+
+One-time setup:
+
+- Create the app  on hosting.bloxity.io (Legion has no create-on-deploy).
+- Repo secret:  (from hosting.bloxity.io). The image is pushed with the workflow's own ; a  PAT is optional.
+- After the first run, make the GHCR package public so Legion can pull it.
+- On Legion,  is provided: player profiles live in MongoDB and are shared by every pod. Without it (local dev) they are kept in , and each browser keeps a signed backup (, key ) that a restarted server restores.
