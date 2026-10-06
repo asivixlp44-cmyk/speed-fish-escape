@@ -117,7 +117,7 @@ button:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
 #jumpBtn, #sprintBtn { position: absolute; border-radius: 50%; pointer-events: auto; touch-action: none; font-size: 1rem; }
 #jumpBtn { right: max(1.5rem, env(safe-area-inset-right, 0px)); bottom: calc(env(safe-area-inset-bottom, 0px) + 2rem); width: 6rem; height: 6rem; }
 #sprintBtn { right: calc(max(1.5rem, env(safe-area-inset-right, 0px)) + 6.8rem); bottom: calc(env(safe-area-inset-bottom, 0px) + 1.2rem); width: 4.6rem; height: 4.6rem; }
-#sprintBtn.on { filter: brightness(1.3); outline: 3px solid var(--white); }
+#sprintBtn.on, #btnAuto.on { filter: brightness(1.3); outline: 3px solid var(--white); }
 body.touch #bottom { bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem); width: min(20rem, 46vw); }
 @media (max-width: 600px) {
     body.touch #bottom { bottom: calc(env(safe-area-inset-bottom, 0px) + 11.5rem); width: min(22rem, 78vw); }
@@ -328,10 +328,11 @@ body.touch #tips { bottom: calc(env(safe-area-inset-bottom, 0px) + 16rem); }
             <button class="btn sq g-blue" id="btnDaily"><span class="ic">📅</span><span class="lb o1">Daily</span><span class="badge" id="dailyBadge" hidden>!</span></button>
             <button class="btn sq g-blue" id="btnRebirth"><span class="ic">🔄</span><span class="lb o1">Rebirth</span></button>
             <button class="btn sq g-purple" id="btnAuras"><span class="ic">✨</span><span class="lb o1">Auras</span></button>
-            <button class="btn sq g-green" id="btnFree"><span class="ic">🎁</span><span class="lb o1">FREE</span><span class="badge" id="freeBadge" hidden>!</span></button>
+            <button class="btn sq g-green" id="btnFree"><span class="ic">🎁</span><span class="lb o1" id="freeLb">FREE</span><span class="badge" id="freeBadge" hidden>!</span></button>
             <button class="btn sq g-yellow" id="btnStore"><span class="ic">🛒</span><span class="lb o1">Store</span></button>
             <button class="btn sq g-pink" id="btnFriends"><span class="ic">👥</span><span class="lb o1">Friends</span></button>
             <button class="btn sq g-blue" id="btnWardrobe"><span class="ic">👕</span><span class="lb o1">Avatar</span></button>
+            <button class="btn sq g-purple" id="btnAuto" title="Swim on your best treadmill while AFK"><span class="ic">🏃</span><span class="lb o1">Auto Train</span></button>
         </div>
 
         <div id="rightCol">

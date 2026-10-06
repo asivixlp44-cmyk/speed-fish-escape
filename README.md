@@ -44,7 +44,9 @@ For development, run `npm run dev:server` and `npm run dev:client` in two termin
 - XP is earned 1:1 with Speed. Max swim speed is `12 + 2 × Level + 20 × Rebirths`, and the level cap is 25.
 - Soundtrack: an original, code-generated 80 BPM chill lo-fi ocean track (electric piano, kalimba, soft swung drums, waves, bubbles and a distant whale). No audio files.
 - **Daily** login streak: one claim per UTC day for seven escalating rewards; missing a day resets the streak.
-- Rebirth, Auras, FREE playtime rewards, Store, Friends and Avatar work as in Speed Football Scape.
+- Rebirth, Auras, FREE playtime rewards, Store, Friends and Avatar work as in Speed Football Scape. The FREE button counts down to the next playtime gift.
+- **Auto Train** (HUD button) puts you on your best unlocked treadmill and keeps you earning Speed while AFK; any movement input turns it off.
+- Joining a hosted server that is asleep: the client polls `/health` (every 2 s, up to 60 s) showing "Waking up a server…", then retries the join up to 4 more times.
 
 ## Controls
 

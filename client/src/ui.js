@@ -14,7 +14,7 @@ function setHtml(node, html) { if (node && node.innerHTML !== html) node.innerHT
 const el = {
     wins: $('#winsVal'), speed: $('#speedVal'), rebStat: $('#rebirthStat'), reb: $('#rebirthVal'), online: $('#onlineVal'),
     xpFill: $('#xpFill'), levelTxt: $('#levelTxt'), xpTxt: $('#xpTxt'), stamFill: $('#stamFill'), stamTxt: $('#stamTxt'),
-    maxSpeed: $('#maxSpeedTxt'), input: $('#speedInput'), price2x: $('#price2x'), boost: $('#boost'), freeBadge: $('#freeBadge'), dailyBadge: $('#dailyBadge'),
+    maxSpeed: $('#maxSpeedTxt'), input: $('#speedInput'), price2x: $('#price2x'), boost: $('#boost'), freeBadge: $('#freeBadge'), dailyBadge: $('#dailyBadge'), freeLb: $('#freeLb'),
     offer: $('#offer'), offerIc: $('#offerIc'), offerTitle: $('#offerTitle'), offerSub: $('#offerSub'),
     prompt: $('#promptBtn'), promptTxt: $('#promptTxt'),
 };
@@ -57,6 +57,10 @@ export function updateHud(P, online) {
     if (boostLeft > 0) el.boost.textContent = '⚡ x' + CFG.boostMult + ' SPEED BOOST ' + clock(boostLeft);
     const mins = (net.now() - S.joinedAt) / 60000;
     el.freeBadge.hidden = !FREE.some((r, i) => mins >= r.min && !S.freeClaimed[i]);
+    // Countdown to the next gift keeps players around for it
+    const next = FREE.find((r, i) => mins < r.min && !S.freeClaimed[i]);
+    const freeText = el.freeBadge.hidden && next ? clock((next.min - mins) * 60) : 'FREE';
+    if (el.freeLb.textContent !== freeText) el.freeLb.textContent = freeText;
     const daily = dailyStatus(S.daily, net.now());
     el.dailyBadge.hidden = !daily.can;
     // One reminder per session once the server has told us the streak

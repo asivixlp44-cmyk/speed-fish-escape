@@ -21,7 +21,7 @@ import {
     refreshModal, promptEl, promptTxtEl, showGoal, animateCounters,
 } from './ui.js';
 import {
-    CFG, STAGES, fishById, auraById, KITS, SKINS, STARTER_FISH, maxSpeedFor, fmt, clamp,
+    CFG, STAGES, TREADMILLS, TREAD_GEO, fishById, auraById, KITS, SKINS, STARTER_FISH, maxSpeedFor, fmt, clamp,
 } from '../../shared/config.js';
 
 // =====================================================================================
@@ -165,6 +165,23 @@ function teleport(pos, yaw) {
     sendMove(true);
 }
 function teleportLobby() { P.stage = -1; teleport(SPAWN, 0); }
+
+// Auto Train: stand on the best unlocked treadmill and keep swimming while AFK.
+// The belts push toward the pool (+x), so the rider faces -x.
+const TRAIN_YAW = -Math.PI / 2;
+let autoTrain = false;
+function setAutoTrain(on) {
+    autoTrain = on;
+    $('#btnAuto').classList.toggle('on', on);
+    if (!on) return;
+    let best = -1;
+    TREADMILLS.forEach((d, i) => { if (!treadLocked(d) && (best < 0 || d.mult > TREADMILLS[best].mult)) best = i; });
+    if (P.dead) actions.revive(false);
+    P.stage = -1;
+    teleport(new V3(TREAD_GEO.cx, TREAD_GEO.top + 0.7, TREAD_GEO.z0 + best * TREAD_GEO.step), TRAIN_YAW);
+    toast('Auto Train ON - x' + TREADMILLS[best].mult + ' treadmill', '#c28cff');
+}
+$('#btnAuto').addEventListener('click', () => { if (running) setAutoTrain(!autoTrain); });
 
 // Dying bursts the rider and shows the Revive popup: revive where you fell (Bux)
 // with a few seconds of shield, or go back to the lobby.
@@ -388,10 +405,30 @@ const SERVER_URL = import.meta.env.VITE_SERVER_URL
         : BLOXITY_GAME_ID ? `https://${BLOXITY_GAME_ID}.host.bloxity.io`
         : import.meta.env.DEV ? `${location.protocol}//${location.hostname}:2567` : location.origin);
 async function serverEndpoint() {
-    if (!BLOXITY_GAME_ID) return SERVER_URL;
-    const r = await BX.resolveEndpoint(BLOXITY_GAME_ID, DEV_CHANNEL ? 'preview' : undefined);
-    if (r && r.cold) $('#loading').textContent = 'Waking up a server…';
-    return (r && r.endpoint) || SERVER_URL;
+    let url = SERVER_URL;
+    if (BLOXITY_GAME_ID) {
+        const r = await BX.resolveEndpoint(BLOXITY_GAME_ID, DEV_CHANNEL ? 'preview' : undefined);
+        url = (r && r.endpoint) || SERVER_URL;
+    }
+    // A scaled-to-zero server takes a while to boot: poll /health (every 2 s, up to 60 s) before joining
+    if (!(await serverUp(url))) {
+        $('#loading').textContent = 'Waking up a server…';
+        const until = Date.now() + 60000;
+        while (Date.now() < until) {
+            await new Promise((res) => setTimeout(res, 2000));
+            if (await serverUp(url)) break;
+        }
+    }
+    return url;
+}
+async function serverUp(url) {
+    try {
+        const ctl = new AbortController();
+        const t = setTimeout(() => ctl.abort(), 4000);
+        const r = await fetch(url.replace(/\/$/, '') + '/health', { signal: ctl.signal, cache: 'no-store' });
+        clearTimeout(t);
+        return r.ok;
+    } catch (e) { return false; }
 }
 let lastMoveSent = 0, lastMoveKey = '';
 function sendMove(force) {
@@ -684,13 +721,15 @@ promptEl.addEventListener('click', usePrompt);
 // =====================================================================================
 // Main update
 // =====================================================================================
+// Dev-only test input (the QA hook drives it); always zero in a real game
+const botInput = { f: 0, r: 0, jump: false, sprint: false };
 let clockT = 0, hudT = 0, online = 1;
 const tmpF = new V3(), tmpR = new V3(), mv = new V3();
 
 function update(dt) {
     clockT += dt;
     const t = clockT;
-    let f = 0, r = 0;
+    let f = botInput.f, r = botInput.r;
     if (keys.KeyW || keys.ArrowUp) f += 1;
     if (keys.KeyS || keys.ArrowDown) f -= 1;
     if (keys.KeyD || keys.ArrowRight) r += 1;
@@ -703,23 +742,27 @@ function update(dt) {
     mv.set(0, 0, 0).addScaledVector(tmpF, f).addScaledVector(tmpR, r);
     if (mv.lengthSq() > 1) mv.normalize();
     if (P.dead) mv.set(0, 0, 0);
-    P.moving = mv.lengthSq() > 0.01;
+    // Any movement input hands control back to the player (small dead zone for stick drift)
+    if (autoTrain && (Math.abs(f) > 0.2 || Math.abs(r) > 0.2)) { setAutoTrain(false); toast('Auto Train OFF', '#c28cff'); }
+    const tread = P.onGround && P.ground && P.ground.tread;
+    const training = autoTrain && !P.dead && tread && !treadLocked(tread);
+    P.moving = mv.lengthSq() > 0.01 || !!training;
 
-    const wantSprint = keys.ShiftLeft || keys.ShiftRight || touchSprint || pad.sprint;
+    const wantSprint = keys.ShiftLeft || keys.ShiftRight || touchSprint || pad.sprint || botInput.sprint;
     P.sprinting = wantSprint && P.moving && P.stamina > 0;
     if (P.sprinting) { P.stamina = Math.max(0, P.stamina - CFG.staminaDrain * dt); P.staminaIdle = 0; }
     else { P.staminaIdle += dt; if (P.staminaIdle > CFG.staminaDelay) P.stamina = Math.min(CFG.staminaMax, P.stamina + CFG.staminaRegen * dt); }
 
     if (!P.dead) {
         const ws = walkSpeed();
-        if ((keys.Space || touchJump || pad.jump) && P.onGround) {
+        if ((keys.Space || touchJump || pad.jump || botInput.jump) && P.onGround) {
             P.vel.y = JUMP_V; P.onGround = false;
             sfx('jump'); P.squashV += 5; dust(P.pos, 4, 0.6);
         }
         P.vel.y -= GRAV * dt;
         P.push.multiplyScalar(Math.exp(-(P.onGround ? 4 : 1.2) * dt));
         let vx = mv.x * ws + P.push.x, vz = mv.z * ws + P.push.z;
-        if (P.onGround && P.ground && P.ground.belt) { vx += P.ground.belt.x; vz += P.ground.belt.z; }
+        if (P.onGround && P.ground && P.ground.belt && !training) { vx += P.ground.belt.x; vz += P.ground.belt.z; }
         const dist = Math.max(Math.abs(vx), Math.abs(vz), Math.abs(P.vel.y)) * dt;
         const n = Math.max(1, Math.ceil(dist / 0.6));
         const sdt = dt / n;
@@ -745,7 +788,8 @@ function update(dt) {
             }
             P.airTime = 0;
         } else P.airTime += dt;
-        if (P.moving) P.facing = lerpAngle(P.facing, Math.atan2(mv.x, mv.z), 1 - Math.exp(-dt * 14));
+        if (training) P.facing = lerpAngle(P.facing, TRAIN_YAW, 1 - Math.exp(-dt * 14));
+        else if (P.moving) P.facing = lerpAngle(P.facing, Math.atan2(mv.x, mv.z), 1 - Math.exp(-dt * 14));
 
         if (P.shield > 0) P.shield -= dt;
         if (P.pos.y < CFG.voidY) { P.shield = 0; die(); }
@@ -867,7 +911,16 @@ async function play() {
     try {
         await waitForLogin(1500);
         const saved = (storageGet('sfe_name') || '').slice(0, 20);
-        const room = await connect(BX.identity().loggedIn ? '' : saved);
+        // A hosted server can be asleep or still starting: retry the join (2, 4, 6, 8 s) before giving up
+        let room = null;
+        for (let attempt = 0; !room; attempt++) {
+            try { room = await connect(BX.identity().loggedIn ? '' : saved); } catch (e) {
+                if (attempt >= 4) throw e;
+                console.warn('[join] attempt', attempt + 1, 'failed:', e && e.message);
+                $('#loading').textContent = 'Waking up a server…';
+                await new Promise((res) => setTimeout(res, 2000 * (attempt + 1)));
+            }
+        }
         const me = room.state.players && room.state.players.get(room.sessionId);
         S.name = me ? me.name : S.name;
     } catch (e) {
@@ -991,6 +1044,7 @@ boot();
 // Dev-only hooks for automated QA runs (stripped from production builds)
 if (import.meta.env.DEV) {
     window.__qa = {
+        input: (o) => Object.assign(botInput, o), solids, cam,
         P, S, STAGES, avatarStats, scene,
         teleport: (x, y, z) => teleport(new V3(x, y, z), 0),
         enter: (i) => actions.enterStage(i),
