@@ -422,6 +422,9 @@ async function serverEndpoint() {
     return url;
 }
 async function serverUp(url) {
+    // The Bloxity matchmaker hands back a wss:// room proxy (wss://play.bloxity.io/v1/ws/<room>):
+    // it has no /health and fetch() cannot open it, so let Colyseus join through it directly
+    if (!/^https?:/i.test(url)) return true;
     try {
         const ctl = new AbortController();
         const t = setTimeout(() => ctl.abort(), 4000);
